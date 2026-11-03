@@ -51,8 +51,10 @@ class S01SourceContracts(unittest.TestCase):
         main = (ROOT / "app/src/main/java/io/github/mikeyphw/mmrl/lsposed/MainActivity.kt").read_text()
         self.assertNotIn("ProcessBuilder(", main)
         self.assertNotIn("RootService.bind", main)
-        self.assertNotIn('"scope add" ->', source)
-        self.assertNotIn('"modules enable" ->', source)
+        self.assertEqual(source.count('"scope add" ->'), 1)
+        self.assertEqual(source.count('"modules enable" ->'), 1)
+        self.assertNotIn('"scope set" ->', source)
+        self.assertNotIn('"db reset" ->', source)
         self.assertIn("ZipFile", source)
         self.assertIn("getInstalledApplications", source)
 

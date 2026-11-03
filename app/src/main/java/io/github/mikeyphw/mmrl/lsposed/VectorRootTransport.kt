@@ -60,6 +60,42 @@ internal object VectorRootTransport {
         return reply
     }
 
+    /** A single explicitly approved mutation. Callers must hold the write gate. */
+    fun mutate(context: Context, operation: String, modulePackage: String, targetPackage: String = ""): JSONObject {
+        if (Looper.myLooper() == Looper.getMainLooper())
+            throw IOException("Vector writes must run on an IO worker")
+        if (!VectorProtocol.validPackage(modulePackage)) throw IOException("Invalid module package")
+        val permitted = when (operation) {
+            "modules enable", "modules disable" -> targetPackage.isEmpty()
+            "scope add", "scope rm" -> targetPackage.endsWith("/0") &&
+                VectorProtocol.validPackage(targetPackage.removeSuffix("/0"))
+            else -> false
+        }
+        if (!permitted) throw IOException("Mutation operation is not allowlisted")
+        val remote = connect(context.applicationContext)
+        val executor = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "lsposed-vector-write-ipc").apply { isDaemon = true }
+        }
+        val raw = try {
+            executor.submit(Callable { remote.mutate(operation, modulePackage, targetPackage) })
+                .get(17, TimeUnit.SECONDS)
+        } catch (e: TimeoutException) {
+            reset()
+            throw IOException("Vector write result unknown after Binder timeout", e)
+        } catch (e: Exception) {
+            reset()
+            throw IOException("Vector write result unknown after Binder failure", e)
+        } finally { executor.shutdownNow() }
+        if (raw.toByteArray(Charsets.UTF_8).size > 131072)
+            throw IOException("Vector write response exceeds limit; outcome unknown")
+        val reply = try { JSONObject(raw) } catch (e: Exception) {
+            throw IOException("Vector write returned malformed JSON; outcome unknown", e)
+        }
+        if (reply.has("mmrl_transport_error") || !reply.optBoolean("success", false))
+            throw IOException("Vector did not confirm the write; refresh and reconcile")
+        return reply
+    }
+
     private fun connect(context: Context): IVectorReadOnly = synchronized(lock) {
         connected?.takeIf { it.asBinder().isBinderAlive }?.let { return@synchronized it }
         binding?.let { old -> main.post { runCatching { RootService.unbind(old) } } }

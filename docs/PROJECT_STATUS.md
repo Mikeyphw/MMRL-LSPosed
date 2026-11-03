@@ -1,31 +1,43 @@
-# Current implementation and gates
+# MMRL-LSPosed — implementation and acceptance status
 
-## S01 — standalone foundation
+Updated November 3, 2026. Source of truth for milestone progress; the separate roadmap includes historical baseline notes.
 
-**Implemented in the source overlay:**
-- New Android namespace and independent debug appId
-- Compose navigation and UI shell; module APK inventory via unprivileged Android APIs
-- English and pt-BR strings, readable icons and system/light/dark/AMOLED theme options
-- Hosted native Devtool APK and lint DAG, script verification of receipts/package/debug signer
-- GitHub wrapper bytes pinned to exact source via preflight/bootstrap script
-- Source-contract and overlay-security offline tests
+## S01–S02: standalone app, Devtool hosted pipeline and stable signing
 
-**Not yet verified:** successful hosted Android build, installation, package visibility on Android 16, screenshots, device tests, signed release, root adapter integration or actual hook activation. No APK acceptance is claimed before hosted CI and physical-device evidence.
+Implemented and verified with GitHub Actions. The app is independent from MMRL and uses
+`io.github.mikeyphw.mmrl.lsposed` (`.debug` variant). Hosted builds are run through
+pinned Devtool source. GitHub Actions uses persistent debug signing and publishes exact
+APK checksums, source receipts, JVM tests, lint evidence and GitHub provenance attestations.
 
-## S02 gates
+## S04–S07: read-only Vector adapter and draft scope UX — accepted
 
-1. Apply only to exact initial repository commit after clean-status check; commit and push generated files.
-2. GitHub Actions must complete Devtool APK/lint DAG and publish valid evidence and a debug APK.
-3. Verify source SHA, run/attempt, debug signature, exact applicationId and output checksum.
-4. Install on separate test profile or in parallel with MMRL, check light/dark/AMOLED, 22+ installed Xposed APK inventory, app icons, filters, module detail and bottom navigation.
-5. Zero root prompts, zero module/scope writes. No claims of hook activation.
+**Hosted evidence:** [successful run 41720288365](https://github.com/Mikeyphw/MMRL-LSPosed/actions/runs/41720288365)
+for source SHA `5e8672ebf728490fd008b53bc2ac46919dc30c2f`. Android APK/AIDL,
+Lint, Kotlin JVM protocol tests, stable signing and GitHub attestation all passed.
 
-## Upcoming phases
+**Physical-device acceptance:** The maintainer explicitly reported on-device verification of
+S04–S07 as working on November 3, 2026. Record this as **maintainer-verified** rather than
+falsely claiming an independently captured automated device-test receipt. This closes the
+read-only milestone for roadmap progression. No active hook-injection verification was claimed.
 
-- S03/04: immutable framework capabilities, Vector 2.2 adapter and Binder root-service migration with new app-owned namespace
-- S05/06: complete module details and polished lists with verified saved-enabled state
-- S07: full-screen draft-only scope editor, real installed-app picker, disabled-apply review
-- S08: explicit verified writes, staged change journaling, disposable-target restoration
-- S09+: Apps reverse lookup, Discover, Downloads, GitHub artifacts and federation sharing
+## S08: guarded configuration changes — implementation candidate
 
-MMRL fork and PR #7 remain untouched until standalone qualification.
+Introduces one-by-one saved module enable/disable and scope add/remove operations with:
+- explicit confirmation, fresh pre-state and scope comparison, fixed root commands;
+- user-0 installed non-system target rules, static-scope boundaries and refusal to implicitly
+  enable a disabled module while adding scope;
+- synchronous write-ahead journal, immutable-ish bounded receipts, read-back validation,
+  and an explicit two-step reconciliation screen for unknown outcomes;
+- no automatic retry, bulk scope replacement, rollbacks, or silent background mutation.
+
+**Pending:** fresh hosted `main` build/test/sign/attest, followed by positive/negative tests
+using *only disposable hook-lab module and target packages*. Verify exact restoration of
+saved module state and scopes. A successful hosted build alone does not qualify S08 device writes.
+
+## Next milestones
+
+S09: Apps reverse lookup, module/app-target relationship maps and manager polish.
+S10: verified catalogs, downloads and GitHub artifact viewer.
+S11: release hardening and independent release signing qualification.
+
+Devtool federation coordination continues separately without rewriting MMRL's main fork.

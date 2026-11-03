@@ -58,16 +58,25 @@ private val managerPackages = setOf(
 )
 
 /**
- * Review-only editor. All checkbox changes are local Compose state.
- * There is no service, mutation, Apply, or persistence call in this screen.
+ * Local draft picker. Checkboxes never write Vector.
+ * A separately confirmed action applies at most one target and verifies a full read-back.
+ * Remaining draft selections are intentionally discarded after each verified change.
  */
 @Composable
 internal fun ScopeDraftPage(
     module: ModuleDiscovery.Candidate,
     state: ScopeState,
     padding: PaddingValues,
+    enabled: Boolean?,
+    onCommitted: (VectorMutation.Outcome) -> Unit,
+    onWriteBusy: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
+    val coroutine = rememberCoroutineScope()
+    var confirmTarget by remember(module.packageName) { mutableStateOf<String?>(null) }
+    var applying by remember(module.packageName) { mutableStateOf(false) }
+    var writeError by remember(module.packageName) { mutableStateOf("") }
+    var writeVerified by remember(module.packageName) { mutableStateOf("") }
     var installed by remember(module.packageName) { mutableStateOf<List<AppTarget>?>(null) }
     var scanError by remember(module.packageName) { mutableStateOf(false) }
     LaunchedEffect(module.packageName) {
@@ -98,7 +107,7 @@ internal fun ScopeDraftPage(
             val recommended = remember(module.packageName, module.declaredScopes) {
                 module.declaredScopes.toSet()
             }
-            // Saveable local draft; no root modification is possible.
+            // Saveable local draft; no root modification until confirmed apply.
             var draft by rememberSaveable(module.packageName, baseline) {
                 mutableStateOf(ArrayList(baseline.sorted()))
             }
@@ -134,21 +143,29 @@ internal fun ScopeDraftPage(
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Saved scope · ${state.entries.size} targets",
                         style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                    Text("Draft only · Live hooks unverified · Nothing will be saved",
+                    Text("Draft selections are local until individually confirmed. Live hooks are unverified.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (module.staticScope) Text("Module declares a static scope. Other targets are not selectable.",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.tertiary)
                     if (added.isNotEmpty() || removed.isNotEmpty()) Text(
-                        "${added.size} proposed additions · ${removed.size} proposed removals — not saved",
+                        "${added.size} proposed additions · ${removed.size} proposed removals — not yet saved",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.tertiary)
+                    if (writeVerified.isNotBlank()) Text(writeVerified,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary)
+                    if (writeError.isNotBlank()) Text(writeError,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(onClick = { showReview = true }) { Text("Review draft") }
+                        OutlinedButton(onClick = { showReview = true }, enabled = !applying) {
+                            Text("Review draft")
+                        }
                         OutlinedButton(onClick = { draft = ArrayList(baseline.sorted()) },
-                            enabled = added.isNotEmpty() || removed.isNotEmpty()) {
+                            enabled = !applying && (added.isNotEmpty() || removed.isNotEmpty())) {
                             Text("Discard changes")
                         }
                     }
@@ -180,7 +197,8 @@ internal fun ScopeDraftPage(
                             target.packageName.startsWith("com.dergoogler.mmrl") ||
                             target.packageName.startsWith("io.github.mikeyphw.mmrl")
                         val permittedByStaticScope = !module.staticScope || target.packageName in recommended
-                        val editable = target.userId == 0 && !target.system && !target.savedOnly &&
+                        val editable = !applying && enabled != null && target.userId == 0 &&
+                            !target.system && !target.savedOnly &&
                             !manager && target.packageName != context.packageName &&
                             target.packageName != module.packageName && permittedByStaticScope
                         val reason = when {
@@ -191,7 +209,7 @@ internal fun ScopeDraftPage(
                             target.packageName == module.packageName -> "Module APK · read-only"
                             target.savedOnly -> "Uninstalled/unknown APK · read-only"
                             !permittedByStaticScope -> "Outside static scope · read-only"
-                            else -> "Local preview only"
+                            else -> "Select for review · not automatically saved"
                         }
                         Card(colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
@@ -237,15 +255,71 @@ internal fun ScopeDraftPage(
                         Text("Remove (${removed.size}): " + removed.take(10).joinToString().ifBlank { "None" })
                         if (added.size > 10 || removed.size > 10)
                             Text("Only the first 10 changed targets per group are shown.")
-                        Text("No Apply action is available. The Vector database is unchanged.",
+                        Text("Only one change can be applied per confirmation. Remaining draft " +
+                            "selections will be discarded after a verified change. " +
+                            "Vector's saved configuration is re-read before and after every operation.",
                             style = MaterialTheme.typography.bodySmall)
                     }
                 },
-                confirmButton = { TextButton(onClick = { showReview = false }) { Text("Close") } },
+                confirmButton = {
+                    val next = removed.firstOrNull() ?: added.firstOrNull()
+                    TextButton(onClick = {
+                        showReview = false
+                        confirmTarget = next
+                    }, enabled = !applying && next != null && enabled != null &&
+                        !(next in added && enabled == false)) {
+                        Text(if (next != null) "Review one change…" else "No changes")
+                    }
+                },
                 dismissButton = { TextButton(onClick = {
                     draft = ArrayList(baseline.sorted()); showReview = false
                 }) { Text("Discard draft") } },
             )
+            val targetKey = confirmTarget
+            if (targetKey != null) {
+                val remove = targetKey in removed
+                val targetName = targetKey.removeSuffix("/0")
+                val supported = targetKey.endsWith("/0") &&
+                    VectorProtocol.validPackage(targetName)
+                AlertDialog(
+                    onDismissRequest = { if (!applying) confirmTarget = null },
+                    title = { Text(if (remove) "Remove one saved target?" else "Add one saved target?") },
+                    text = { Text("Module: ${module.name}\nTarget: $targetKey\n" +
+                        "Vector 2.2 may implicitly enable a module on scope addition. " +
+                        "Additions are blocked while the module is disabled. " +
+                        "The entire saved scope and enabled state will be rechecked before " +
+                        "this single write. No batch or automatic retry will run.") },
+                    confirmButton = { TextButton(onClick = {
+                        confirmTarget = null
+                        writeError = ""
+                        writeVerified = ""
+                        applying = true
+                        onWriteBusy(true)
+                        coroutine.launch {
+                            val request = VectorMutation.Request(module.packageName,
+                                if (remove) VectorMutation.Action.REMOVE_SCOPE
+                                else VectorMutation.Action.ADD_SCOPE,
+                                enabled ?: false, state.entries, targetName)
+                            val result = withContext(Dispatchers.IO) { runCatching {
+                                VectorMutation.change(context.applicationContext, request)
+                            } }
+                            result.onSuccess { outcome ->
+                                onCommitted(outcome)
+                                draft = ArrayList(outcome.scopes.map { it.key }.sorted())
+                                writeVerified = "One saved scope change verified · ${outcome.receiptId.take(8)}"
+                            }.onFailure { error ->
+                                writeError = (error.message ?: "Outcome uncertain") +
+                                    ". Refresh and reconcile before retrying if a write was attempted."
+                            }
+                            applying = false
+                            onWriteBusy(false)
+                        }
+                    }, enabled = !applying && enabled != null && supported &&
+                        (remove || enabled == true)) { Text("Confirm single change") } },
+                    dismissButton = { TextButton(onClick = { confirmTarget = null },
+                        enabled = !applying) { Text("Cancel") } },
+                )
+            }
         }
     }
 }
@@ -255,7 +329,7 @@ private fun ScopeInfo(padding: PaddingValues, message: String) {
     Column(Modifier.fillMaxSize().padding(padding).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(message, style = MaterialTheme.typography.bodyLarge)
-        Text("Scope is read-only. Nothing is written to the Vector database.",
+        Text("Saved scopes are unavailable until a verified Vector connection is ready.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

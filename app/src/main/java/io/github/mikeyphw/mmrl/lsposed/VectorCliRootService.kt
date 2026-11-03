@@ -12,9 +12,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * A non-daemon libsu service: 3 immutable read-only Vector CLI operations.
- * No shell, module enable/disable, scope add/remove/set, or config/db commands.
- * Calls originate only after the user explicitly chooses Connect.
+ * A non-daemon libsu service: 3 fixed reads + 4 single-target mutations.
+ * No arbitrary shell, batch, scope set, config, database, or log commands.
+ * Writes are permitted only through the app's pre-read, journal, confirmation
+ * and read-back gate; the root side independently enforces fixed arguments.
  * Attribution: reviewed MMRL Phase06 VectorCliRootService design, GPL-3.0.
  */
 class VectorCliRootService : RootService() {
@@ -31,6 +32,22 @@ class VectorCliRootService : RootService() {
             return try { executeFixed(args) }
             catch (e: Exception) { failure("Vector query unavailable (${e.javaClass.simpleName})") }
         }
+
+        override fun mutate(operation: String?, modulePackage: String?, targetPackage: String?): String {
+            if (Process.myUid() != 0) return failure("Root service is not UID 0")
+            val module = modulePackage.orEmpty()
+            val target = targetPackage.orEmpty()
+            if (!valid(module)) return failure("Invalid module package")
+            val args = when (operation) {
+                "modules enable" -> if (target.isEmpty()) listOf("modules", "enable", module) else null
+                "modules disable" -> if (target.isEmpty()) listOf("modules", "disable", module) else null
+                "scope add" -> if (safeScopeTarget(target)) listOf("scope", "add", module, target) else null
+                "scope rm" -> if (safeScopeTarget(target)) listOf("scope", "rm", module, target) else null
+                else -> null
+            } ?: return failure("Mutation not allowlisted")
+            return try { executeFixed(args) }
+            catch (e: Exception) { failure("Vector mutation outcome unknown (${e.javaClass.simpleName})") }
+        }
     }
 
     override fun onBind(intent: Intent): IBinder = bridge
@@ -39,6 +56,9 @@ class VectorCliRootService : RootService() {
         JSONObject().put("mmrl_transport_error", message.take(120)).toString()
 
     private fun valid(pkg: String) = pkg.length <= 180 && PKG.matches(pkg)
+
+    private fun safeScopeTarget(target: String) =
+        target.endsWith("/0") && valid(target.removeSuffix("/0"))
 
     private fun executeFixed(args: List<String>): String {
         // An exact executable in the installed module, not a user-controlled path.

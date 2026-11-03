@@ -12,8 +12,10 @@ class ReadOnlyVectorContracts(unittest.TestCase):
     def test_exact_three_privileged_operations(self):
         service = (SRC / 'VectorCliRootService.kt').read_text()
         self.assertEqual(len(re.findall(r'"(status|modules ls|scope ls)"\s*->', service)), 3)
-        for disallowed in ('"modules enable" ->', '"modules disable" ->', '"scope add" ->',
-                           '"scope rm" ->', '"scope set" ->', '"config set" ->', '"db reset" ->'):
+        for write in ('"modules enable" ->', '"modules disable" ->',
+                      '"scope add" ->', '"scope rm" ->'):
+            self.assertEqual(service.count(write), 1)
+        for disallowed in ('"scope set" ->', '"config set" ->', '"db reset" ->'):
             self.assertNotIn(disallowed, service)
         self.assertIn('Process.myUid() != 0', service)
         self.assertIn('"/data/adb/modules/zygisk_vector/cli"', service)
@@ -28,15 +30,17 @@ class ReadOnlyVectorContracts(unittest.TestCase):
         self.assertEqual(app.findall('receiver'), [])
         aidl = (ROOT / 'app/src/main/aidl/io/github/mikeyphw/mmrl/lsposed/IVectorReadOnly.aidl').read_text()
         self.assertIn('String query(String operation, String modulePackage);', aidl)
+        self.assertIn('String mutate(String operation, String modulePackage, String targetPackage);', aidl)
         self.assertNotIn('execute(String', aidl)
 
-    def test_no_write_api_and_no_privilege_in_ui(self):
+    def test_no_shell_or_root_binding_in_ui(self):
         for name in ('MainActivity.kt', 'ScopeDraftPage.kt', 'VectorReadOnly.kt',
                      'VectorProtocol.kt', 'ModuleDiscovery.kt'):
             source = (SRC / name).read_text()
             with self.subTest(name=name):
                 for denied in ('ProcessBuilder(', 'RootService.bind', 'Shell.cmd(',
-                               'Runtime.getRuntime()', 'scope add', 'modules enable', 'scope set'):
+                               'Runtime.getRuntime()', 'scope set'):
+
                     self.assertNotIn(denied, source)
         transport = (SRC / 'VectorRootTransport.kt').read_text()
         self.assertIn('Looper.getMainLooper()', transport)
@@ -64,18 +68,20 @@ class ReadOnlyVectorContracts(unittest.TestCase):
                       'MAX_METADATA_BYTES', 'getInstalledApplications'):
             self.assertIn(entry, scanner)
 
-    def test_scope_draft_review_is_explicit_and_never_applies(self):
+    def test_scope_draft_review_is_explicit_and_single_apply(self):
         editor = (SRC / 'ScopeDraftPage.kt').read_text()
         for item in ('TargetTab.SUGGESTED', 'TargetTab.SELECTED', 'AlertDialog(',
                      'Review draft', 'Discard changes', 'rememberSaveable',
                      'Checkbox(', 'managerPackages', 'staticScope', 'Other Android user'):
             self.assertIn(item, editor)
-        for denied in ('onApply', 'submitChanges', 'writeScope', 'RootService', 'VectorRootTransport'):
+        for denied in ('submitChanges', 'writeScope', 'RootService', 'VectorRootTransport'):
             self.assertNotIn(denied, editor)
         activity = (SRC / 'MainActivity.kt').read_text()
         self.assertIn('if (vectorRefresh == 0) return@LaunchedEffect', activity)
         self.assertIn('onConnect = { vectorRefresh++ }', activity)
         self.assertIn('if (scopeOpen && selectedModule?.packageName == pkg)', activity)
+        self.assertIn('VectorMutation.change(', editor)
+        self.assertIn('Confirm single change', editor)
 
     def test_ci_keeps_signing_and_adds_real_jvm_tests(self):
         flow = (ROOT / '.github/workflows/s01-hosted-devtool.yml').read_text()

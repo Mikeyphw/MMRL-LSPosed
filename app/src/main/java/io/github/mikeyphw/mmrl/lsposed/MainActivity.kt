@@ -130,6 +130,8 @@ private fun StandaloneApp() {
                     stored.vector = VectorState.Unavailable("Connect was interrupted; retry manually")
                 if (stored.scope is ScopeState.Loading)
                     stored.scope = ScopeState.Unavailable("Scope read interrupted; reopen preview")
+                // Activity recreation can cancel a UI coroutine; journal recovery stays authoritative.
+                stored.writeBusy = false
             }
         }
         var selectedModule by session::selectedModule
@@ -142,7 +144,8 @@ private fun StandaloneApp() {
         var scopeRequest by remember { mutableIntStateOf(0) }
         var scope by session::scope
         val scopeCounts = session.scopeCounts
-        BackHandler(enabled = settings || scopeOpen || selectedModule != null) {
+        BackHandler(enabled = session.writeBusy || settings || scopeOpen || selectedModule != null) {
+            if (session.writeBusy) return@BackHandler
             when {
                 scopeOpen -> { scopeOpen = false; scope = ScopeState.Idle }
                 selectedModule != null -> selectedModule = null
@@ -188,10 +191,12 @@ private fun StandaloneApp() {
             settings = settings,
             onSettings = { settings = true },
             onBack = {
-                when {
-                    scopeOpen -> { scopeOpen = false; scope = ScopeState.Idle }
-                    selectedModule != null -> selectedModule = null
-                    else -> settings = false
+                if (!session.writeBusy) {
+                    when {
+                        scopeOpen -> { scopeOpen = false; scope = ScopeState.Idle }
+                        selectedModule != null -> selectedModule = null
+                        else -> settings = false
+                    }
                 }
             },
             selectedModule = selectedModule,
@@ -199,12 +204,36 @@ private fun StandaloneApp() {
         ) { innerPadding ->
             when {
                 settings -> SettingsPage(appearance, onAppearance = { appearance = it }, innerPadding)
-                scopeOpen && selectedModule != null -> ScopeDraftPage(selectedModule!!, scope, innerPadding)
-                selectedModule != null -> ModuleDetailPage(selectedModule!!, vector, scopeCounts, innerPadding,
-                    onScope = { scope = ScopeState.Idle; scopeOpen = true; scopeRequest++ })
+                scopeOpen && selectedModule != null -> {
+                    val currentModule = selectedModule!!
+                    ScopeDraftPage(currentModule, scope, innerPadding,
+                        enabled = (vector as? VectorState.Ready)?.snapshot?.modules
+                            ?.get(currentModule.packageName)?.enabled,
+                        onWriteBusy = { session.writeBusy = it },
+                        onCommitted = { result ->
+                            vector = VectorState.Ready(result.snapshot)
+                            scope = ScopeState.Ready(result.scopes)
+                            session.scopeCounts = session.scopeCounts +
+                                (currentModule.packageName to result.scopes.size)
+                        })
+                }
+                selectedModule != null -> {
+                    val currentModule = selectedModule!!
+                    ModuleDetailPage(currentModule, vector, scopeCounts, innerPadding,
+                        onScope = { scope = ScopeState.Idle; scopeOpen = true; scopeRequest++ },
+                        onWriteBusy = { session.writeBusy = it },
+                        onCommitted = { result ->
+                            vector = VectorState.Ready(result.snapshot)
+                            session.scopeCounts = session.scopeCounts +
+                                (currentModule.packageName to result.scopes.size)
+                        })
+                }
                 section == Section.HOME -> HomePage(combined, vector, innerPadding, onBrowse = {
                     section = Section.MODULES
-                }, onConnect = { vectorRefresh++ })
+                }, onConnect = { vectorRefresh++ }, onReconciled = { snapshot ->
+                    vector = VectorState.Ready(snapshot)
+                    session.scopeCounts = emptyMap()
+                })
                 section == Section.MODULES -> ModuleListPage(
                     combined, discoveryError, vector, scopeCounts, innerPadding,
                     onRefresh = { candidates = null; refreshKey++;
@@ -286,6 +315,7 @@ private fun HomePage(
     padding: PaddingValues,
     onBrowse: () -> Unit,
     onConnect: () -> Unit,
+    onReconciled: (VectorReadOnly.Snapshot) -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(padding),
@@ -343,6 +373,7 @@ private fun HomePage(
                 }
             }
         }
+        item { ReconcilePanel(onReconciled) }
         item {
             SectionHeading(stringResource(R.string.discovered_apks))
             Spacer(Modifier.height(10.dp))
@@ -463,7 +494,16 @@ private fun ModuleListPage(
 
 @Composable
 private fun ModuleDetailPage(candidate: ModuleDiscovery.Candidate, vector: VectorState,
-    scopeCounts: Map<String, Int>, padding: PaddingValues, onScope: () -> Unit) {
+    scopeCounts: Map<String, Int>, padding: PaddingValues, onScope: () -> Unit,
+    onCommitted: (VectorMutation.Outcome) -> Unit,
+    onWriteBusy: (Boolean) -> Unit) {
+    val context = LocalContext.current
+    val coroutine = rememberCoroutineScope()
+    var preparing by remember(candidate.packageName) { mutableStateOf(false) }
+    var committing by remember(candidate.packageName) { mutableStateOf(false) }
+    var request by remember(candidate.packageName) { mutableStateOf<VectorMutation.Request?>(null) }
+    var writeMessage by remember(candidate.packageName) { mutableStateOf("") }
+    val stored = (vector as? VectorState.Ready)?.snapshot?.modules?.get(candidate.packageName)
     LazyColumn(modifier = Modifier.fillMaxSize().padding(padding),
         contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
@@ -471,7 +511,6 @@ private fun ModuleDetailPage(candidate: ModuleDiscovery.Candidate, vector: Vecto
                 Column(Modifier.fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     InstalledAppIcon(candidate.packageName, size = 68)
                     Text(candidate.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-                    val stored = (vector as? VectorState.Ready)?.snapshot?.modules?.get(candidate.packageName)
                     Text(when {
                         stored == null -> "Saved enabled state unknown"
                         stored.enabled -> "Enabled in Vector saved configuration"
@@ -484,6 +523,34 @@ private fun ModuleDetailPage(candidate: ModuleDiscovery.Candidate, vector: Vecto
                             ?: "Saved scope count unknown until preview is opened",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (stored != null) {
+                        OutlinedButton(onClick = {
+                            preparing = true
+                            writeMessage = ""
+                            coroutine.launch {
+                                val result = withContext(Dispatchers.IO) { runCatching {
+                                    val current = VectorReadOnly.inspect(context.applicationContext)
+                                    val now = current.modules[candidate.packageName]
+                                    if (now?.enabled != stored.enabled)
+                                        throw java.io.IOException("Saved state changed. Refresh Vector before editing.")
+                                    val baseline = VectorReadOnly.scopes(context.applicationContext, candidate.packageName)
+                                    VectorMutation.Request(candidate.packageName,
+                                        if (stored.enabled) VectorMutation.Action.DISABLE else VectorMutation.Action.ENABLE,
+                                        stored.enabled, baseline)
+                                } }
+                                result.onSuccess { request = it }.onFailure {
+                                    writeMessage = it.message ?: "Could not prepare module change"
+                                }
+                                preparing = false
+                            }
+                        }, enabled = !preparing && !committing) {
+                            Text(if (stored.enabled) "Disable module…" else "Enable module…")
+                        }
+                    }
+                    if (preparing || committing) Text("Verifying saved Vector state…")
+                    if (writeMessage.isNotBlank()) Text(writeMessage,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        style = MaterialTheme.typography.bodySmall)
                     OutlinedButton(onClick = onScope, enabled = stored != null) {
                         Text(stringResource(R.string.scope_preview))
                     }
@@ -509,6 +576,102 @@ private fun ModuleDetailPage(candidate: ModuleDiscovery.Candidate, vector: Vecto
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+    val confirmation = request
+    if (confirmation != null) AlertDialog(
+        onDismissRequest = { if (!committing) request = null },
+        title = { Text(if (confirmation.action == VectorMutation.Action.ENABLE)
+            "Enable saved module?" else "Disable saved module?") },
+        text = { Text("${candidate.name} (${candidate.packageName})\n" +
+            "Vector will update its saved configuration. Actual hooks may require a process restart. " +
+            "The operation will be re-read and verified; an uncertain outcome blocks further writes.") },
+        confirmButton = { TextButton(onClick = {
+            request = null
+            committing = true
+            onWriteBusy(true)
+            coroutine.launch {
+                val outcome = withContext(Dispatchers.IO) { runCatching {
+                    VectorMutation.change(context.applicationContext, confirmation)
+                } }
+                outcome.onSuccess {
+                    onCommitted(it)
+                    writeMessage = "Saved change verified · receipt ${it.receiptId.take(8)}"
+                }.onFailure {
+                    writeMessage = (it.message ?: "Uncertain write outcome") +
+                        ". If a write started, review and reconcile from Home before retrying."
+                }
+                committing = false
+                onWriteBusy(false)
+            }
+        }, enabled = !committing) { Text("Confirm one change") } },
+        dismissButton = { TextButton(onClick = { request = null },
+            enabled = !committing) { Text("Cancel") } },
+    )
+}
+
+/** Reconciliation is two deliberate reads and explicit user acknowledgement; never a retry. */
+@Composable
+private fun ReconcilePanel(onReconciled: (VectorReadOnly.Snapshot) -> Unit) {
+    val context = LocalContext.current
+    val coroutine = rememberCoroutineScope()
+    var pending by remember { mutableStateOf(runCatching {
+        VectorWriteJournal.pending(context)
+    }.getOrNull()) }
+    var review by remember { mutableStateOf<VectorMutation.Review?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+    val entry = pending ?: return
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
+        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Configuration needs reconciliation", style = MaterialTheme.typography.titleMedium)
+            Text("${entry.action} · ${entry.module}" +
+                if (entry.target.isNotBlank()) " · ${entry.target}" else "",
+                style = MaterialTheme.typography.bodySmall)
+            Text("A previous write was interrupted or could not be verified. " +
+                "No further writes are allowed until you inspect saved Vector state.",
+                style = MaterialTheme.typography.bodyMedium)
+            if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
+            OutlinedButton(onClick = {
+                busy = true; error = ""
+                coroutine.launch {
+                    withContext(Dispatchers.IO) { runCatching {
+                        VectorMutation.reviewUncertain(context.applicationContext)
+                    } }.onSuccess { review = it }.onFailure {
+                        error = it.message ?: "Vector read failed"
+                    }
+                    busy = false
+                }
+            }, enabled = !busy) { Text("Inspect saved state") }
+        }
+    }
+    val current = review
+    if (current != null) AlertDialog(
+        onDismissRequest = { if (!busy) review = null },
+        title = { Text("Reconcile without retrying") },
+        text = { Text("Module: ${current.entry.module}\n" +
+            "Observed enabled: " +
+            (current.snapshot.modules[current.entry.module]?.enabled?.toString() ?: "not listed") +
+            "\nObserved saved targets: ${current.scopes.size}\n" +
+            "This does NOT undo or repeat the previous change. " +
+            "Acknowledging records the observation and unlocks future individually confirmed writes.") },
+        confirmButton = { TextButton(onClick = {
+            busy = true
+            coroutine.launch {
+                withContext(Dispatchers.IO) { runCatching {
+                    VectorMutation.acknowledgeReview(context.applicationContext, current)
+                } }.onSuccess { snapshot ->
+                    review = null
+                    pending = null
+                    onReconciled(snapshot)
+                }.onFailure {
+                    error = it.message ?: "Reconciliation not verified"
+                    review = null
+                }
+                busy = false
+            }
+        }, enabled = !busy) { Text("Acknowledge observed state") } },
+        dismissButton = { TextButton(onClick = { review = null },
+            enabled = !busy) { Text("Cancel") } },
+    )
 }
 
 @Composable

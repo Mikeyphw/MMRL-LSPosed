@@ -11,11 +11,11 @@
     <string name="hello_description">A cleaner home for Xposed configuration.</string>
     <string name="framework">Framework</string>
     <string name="not_connected">Not connected yet</string>
-    <string name="framework_details">The verified Vector connection is coming in a later milestone. No root commands run in this build.</string>
+    <string name="framework_details">Connect explicitly to Vector v2.2 to inspect saved settings. Editing requires confirmation and read-back.</string>
     <string name="discovered_apks">Detected module APKs</string>
     <string name="read_only_label">Read-only discovery</string>
     <string name="browse_modules">Browse modules</string>
-    <string name="modules_description">Installed APKs that advertise Xposed entry points. This does not verify whether they are enabled or hooking processes.</string>
+    <string name="modules_description">Installed Xposed APKs. Saved enabled state is shown after connecting to Vector; live hooks are never inferred.</string>
     <string name="refresh">Refresh</string>
     <string name="search_modules">Search modules</string>
     <string name="all">All</string>
@@ -26,7 +26,7 @@
     <string name="module_scan_error">Couldn’t inspect installed apps</string>
     <string name="search_empty">No matching modules</string>
     <string name="scope_preview">Scope editor</string>
-    <string name="scope_future">Scope editing is unavailable in this read-only foundation. No changes can be made.</string>
+    <string name="scope_future">Scope edits require an individually confirmed change, full read-back, and reconciliation on uncertain outcomes.</string>
     <string name="device_apps_title">App targets</string>
     <string name="device_apps_description">Explore which apps a module targets after Vector\'s verified scope adapter is connected.</string>
     <string name="discover_title">Discover modules</string>
@@ -39,12 +39,12 @@
     <string name="dark">Dark</string>
     <string name="amoled">AMOLED</string>
     <string name="about">About</string>
-    <string name="about_detail">Independent GPL-3.0 Android application. S01 is a read-only APK discovery foundation, not an active-hook verifier.</string>
+    <string name="about_detail">Independent GPL-3.0 Android application. Vector 2.2 saved configuration can be edited with confirmation. Hook execution is not verified.</string>
     <string name="technical_details">Technical details</string>
     <string name="module_format">Module format</string>
     <string name="package_name">Package</string>
     <string name="installed_not_enabled">Installed APK — enabled state unknown</string>
     <string name="loading">Finding installed modules…</string>
     <string name="count_label">%1$d installed</string>
-    <string name="config_not_verified">Saved module state is not available in S01.</string>
+    <string name="config_not_verified">Saved module state is only available after explicitly connecting to Vector.</string>
 </resources>

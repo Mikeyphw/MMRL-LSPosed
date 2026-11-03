@@ -1,8 +1,22 @@
 # MMRL-LSPosed — Implementation Roadmap
 
-**Version:** 1.0 · **Baseline:** 2026-11-03 · **State:** Planning approved for documentation; implementation not started
+**Version:** 1.1 · **Baseline:** 2026-11-03 · **Current state:** S04–S07 accepted; S08 implementation candidate pending hosted/device-write acceptance
 
 > **Product objective:** Build a standalone, polished Android LSPosed/Vector manager with its own application identity, Material 3 UX, module and scope management, app-target reverse lookup, discovery/downloads, and Devtool-powered cross-repository engineering. Do not ship the existing debug-like MMRL LSPosed screen.
+
+## Current progress (2026-11-03)
+
+- S01–S02 foundation and hosted Devtool signing pipeline: successful, stable-signed APK.
+- S04–S07 Vector 2.2 read-only features: CI run
+  [41720288365](https://github.com/Mikeyphw/MMRL-LSPosed/actions/runs/41720288365)
+  passed; maintainer reported successful physical-device verification and approved closure.
+  See `docs/S04_S07_ACCEPTANCE.md` for evidence limitations.
+- S08 guarded writes: implementation prepared, **not device-write qualified**. See
+  `docs/S08_GUARDED_WRITES.md`. No personal modules should be used for acceptance tests.
+- S09–S11 and federation work: pending further review.
+
+**Historical note:** Section 2 preserves the original planning-time snapshots; statements
+about a repository not yet existing refer to the old baseline, not current GitHub state.
 
 ## 1. Non-negotiable decisions
 
