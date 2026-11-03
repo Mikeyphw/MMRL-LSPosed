@@ -37,3 +37,8 @@ google-services.json
 # Python bytecode and caches
 __pycache__/
 *.py[cod]
+
+# Private signing key formats must never enter source control
+*.p12
+*.pfx
+*.pkcs12

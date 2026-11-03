@@ -91,14 +91,6 @@ jobs:
             --outputs "$RUNNER_TEMP/s01-outputs" \
             --evidence "$RUNNER_TEMP/s01-evidence/verification.json"
 
-      - name: Publish verified debug candidate
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: mmrl-lsposed-s01-debug-${{ github.run_id }}-attempt${{ github.run_attempt }}
-          path: ${{ runner.temp }}/s01-outputs/node-01/
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Run independent native lint node
         shell: bash
         run: |
@@ -106,6 +98,37 @@ jobs:
           "$RUNNER_TEMP/devtool-venv/bin/python" scripts/hosted_devtool.py run --node lint \
             --root "$GITHUB_WORKSPACE" --inputs "$RUNNER_TEMP/s01-inputs" \
             --outputs "$RUNNER_TEMP/s01-outputs"
+
+      # Secrets are never exposed to pull_request builds. The source-bound
+      # Devtool build, native receipt, and independent lint must pass first.
+      - name: Sign debug APK with dedicated stable GitHub signing identity
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          MMRL_DEBUG_KEYSTORE_B64: ${{ secrets.MMRL_DEBUG_KEYSTORE_B64 }}
+          MMRL_DEBUG_STORE_PASSWORD: ${{ secrets.MMRL_DEBUG_STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/devtool-venv/bin/python" scripts/hosted_debug_signing.py \
+            --root "$GITHUB_WORKSPACE"
+
+      - name: Publish verified stable-signed debug APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mmrl-lsposed-signed-debug-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/s01-signed/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish ephemeral PR debug APK (not stable-signed)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mmrl-lsposed-pr-debug-ephemeral-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/s01-outputs/node-01/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Publish lint reports
         if: always()
@@ -126,3 +149,64 @@ jobs:
           path: ${{ runner.temp }}/s01-evidence/
           if-no-files-found: warn
           retention-days: 14
+
+  attest-signed:
+    name: GitHub provenance for stable-signed debug APK
+    needs: hosted-debug
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Download exact signed debug artifact from this run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mmrl-lsposed-signed-debug-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signed-debug
+
+      - name: Authenticate signed debug receipt and exact APK hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/signed-debug" <<'PYVERIFY'
+          import hashlib, json, os, pathlib, re, sys
+          d = pathlib.Path(sys.argv[1]).resolve()
+          apk = d / 'MMRL-LSPosed-debug-signed.apk'
+          receipt_file = d / 'signed-debug.json'
+          if (d.is_symlink() or apk.is_symlink() or receipt_file.is_symlink()
+                  or not apk.is_file() or not receipt_file.is_file()):
+              raise SystemExit('SIGNED_RECEIPT_REFUSED: missing/nonregular artifact')
+          if receipt_file.stat().st_size > 32768 or apk.stat().st_size > 250_000_000:
+              raise SystemExit('SIGNED_RECEIPT_REFUSED: invalid artifact size')
+          receipt = json.loads(receipt_file.read_text())
+          checks = {
+              'schema': 'mmrl-lsposed.hosted-signed-debug.v1',
+              'status': 'SIGNED_DEBUG_VERIFIED_NOT_RELEASE',
+              'repository': 'Mikeyphw/MMRL-LSPosed',
+              'source_sha': os.environ['GITHUB_SHA'],
+              'run_id': int(os.environ['GITHUB_RUN_ID']),
+              'attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              'application_id': 'io.github.mikeyphw.mmrl.lsposed.debug',
+              'signed_apk': apk.name,
+              'debuggable': True,
+              'release_qualified': False,
+              'device_qualified': False,
+          }
+          if any(type(receipt.get(k)) is not type(v) or receipt.get(k) != v for k,v in checks.items()):
+              raise SystemExit('SIGNED_RECEIPT_REFUSED: source identity mismatch')
+          digest = hashlib.file_digest(apk.open('rb'), 'sha256').hexdigest()
+          if (digest != receipt.get('signed_apk_sha256') or
+                  apk.stat().st_size != receipt.get('signed_apk_size') or
+                  not re.fullmatch('[0-9a-f]{64}', str(receipt.get('certificate_sha256', '')))):
+              raise SystemExit('SIGNED_RECEIPT_REFUSED: signed APK digest/identity mismatch')
+          print('SIGNED_DEBUG_RECEIPT_AND_HASH_PASS: '+digest)
+          PYVERIFY
+
+      - name: Attest exact signed APK as GitHub build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ runner.temp }}/signed-debug/MMRL-LSPosed-debug-signed.apk

@@ -1,0 +1,9 @@
+{
+  "alias": "mmrl_lsposed_debug",
+  "application_id": "io.github.mikeyphw.mmrl.lsposed.debug",
+  "certificate_sha256": "d887b78cc920b49112e2373f2389f51d7bc2931f894ff89509a0aae14e617b27",
+  "purpose": "debug-only",
+  "ref": "refs/heads/main",
+  "repository": "Mikeyphw/MMRL-LSPosed",
+  "schema": "mmrl-lsposed.debug-signing.v1"
+}
