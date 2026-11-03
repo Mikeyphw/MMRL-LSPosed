@@ -1,0 +1,128 @@
+name: S01 Standalone Android hosted Devtool
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s01-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hosted-debug:
+    name: Devtool native debug APK + lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      DEVTOOL_SHA: b164463db51e2cffd12f753043b9e55a08cc43ae
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout exact app source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Run non-Gradle source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -m unittest discover -s scripts/tests -v
+
+      - name: Set up Java 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+        with:
+          cmdline-tools-version: 15859902
+          packages: 'platforms;android-36 build-tools;36.0.0 platform-tools'
+
+      - name: Validate wrapper and enable hosted dependency cache
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        with:
+          validate-wrappers: true
+
+      - name: Install reviewed Devtool commit in venv
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/Mikeyphw/devtool.git "$RUNNER_TEMP/devtool-src"
+          git -C "$RUNNER_TEMP/devtool-src" checkout --detach "$DEVTOOL_SHA"
+          test "$(git -C "$RUNNER_TEMP/devtool-src" rev-parse HEAD)" = "$DEVTOOL_SHA"
+          python3 -m venv "$RUNNER_TEMP/devtool-venv"
+          "$RUNNER_TEMP/devtool-venv/bin/python" -m pip install --disable-pip-version-check "$RUNNER_TEMP/devtool-src"
+
+      - name: Review exact source and compile Devtool graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/devtool-venv/bin/python" scripts/hosted_devtool.py plan \
+            --root "$GITHUB_WORKSPACE" --evidence "$RUNNER_TEMP/s01-evidence/plan.json"
+
+      - name: Execute native debug APK DAG node
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/devtool-venv/bin/python" scripts/hosted_devtool.py run --node apk \
+            --root "$GITHUB_WORKSPACE" --inputs "$RUNNER_TEMP/s01-inputs" \
+            --outputs "$RUNNER_TEMP/s01-outputs"
+
+      - name: Verify signed debug APK, package and immutable node receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/devtool-venv/bin/python" scripts/hosted_devtool.py verify \
+            --root "$GITHUB_WORKSPACE" --inputs "$RUNNER_TEMP/s01-inputs" \
+            --outputs "$RUNNER_TEMP/s01-outputs" \
+            --evidence "$RUNNER_TEMP/s01-evidence/verification.json"
+
+      - name: Publish verified debug candidate
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mmrl-lsposed-s01-debug-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/s01-outputs/node-01/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Run independent native lint node
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/devtool-venv/bin/python" scripts/hosted_devtool.py run --node lint \
+            --root "$GITHUB_WORKSPACE" --inputs "$RUNNER_TEMP/s01-inputs" \
+            --outputs "$RUNNER_TEMP/s01-outputs"
+
+      - name: Publish lint reports
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mmrl-lsposed-s01-lint-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: |
+            app/build/reports/lint-results-debug.*
+            app/build/reports/lint-results-*
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publish source/graph verification evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mmrl-lsposed-s01-evidence-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/s01-evidence/
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,22 @@
+[versions]
+agp = "9.0.0"
+kotlin = "2.2.0"
+activityCompose = "1.10.1"
+composeBom = "2025.06.01"
+material3 = "1.3.2"
+foundation = "1.8.3"
+composeUi = "1.8.3"
+coroutines = "1.8.1"
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+
+[libraries]
+activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+compose-material3 = { module = "androidx.compose.material3:material3", version.ref = "material3" }
+compose-foundation = { module = "androidx.compose.foundation:foundation", version.ref = "foundation" }
+compose-ui = { module = "androidx.compose.ui:ui", version.ref = "composeUi" }
+compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview", version.ref = "composeUi" }
+compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling", version.ref = "composeUi" }
+coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }

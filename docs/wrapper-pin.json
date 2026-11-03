@@ -1,0 +1,10 @@
+{
+  "source_repository": "Mikeyphw/MMRL",
+  "source_commit": "7312cc03587cf60ef0c7010810b012d677ee5f1f",
+  "gradlew_blob_sha1": "1aa94a4269074199e6ed2c37e8db3e0826030965",
+  "gradle_wrapper_jar_blob_sha1": "d64cd4917707c1f8861d8cb53dd15194d4248596",
+  "gradle_wrapper_jar_sha256": "d3b261c2820e9e3d8d639ed084900f11f4a86050a8f83342ade7b6bc9b0d2bdd",
+  "gradle_wrapper_properties_blob_sha1": "6510bd8ba4ab4446420098b3e7c7fed0c2ffd4b7",
+  "gradle_distribution_version": "9.1.0",
+  "gradle_distribution_sha256": "a17ddd85a26b6a7f5ddb71ff8b05fc5104c0202c6e64782429790c933686c806"
+}
