@@ -99,6 +99,21 @@ jobs:
             --root "$GITHUB_WORKSPACE" --inputs "$RUNNER_TEMP/s01-inputs" \
             --outputs "$RUNNER_TEMP/s01-outputs"
 
+      - name: Run independent Vector JVM protocol tests via native Devtool
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/devtool-venv/bin/python" scripts/hosted_devtool.py run --node test --root "$GITHUB_WORKSPACE" --inputs "$RUNNER_TEMP/s01-inputs" --outputs "$RUNNER_TEMP/s01-outputs"
+
+      - name: Publish hosted JVM test results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mmrl-lsposed-jvm-tests-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: app/build/test-results/testDebugUnitTest/
+          if-no-files-found: warn
+          retention-days: 14
+
       # Secrets are never exposed to pull_request builds. The source-bound
       # Devtool build, native receipt, and independent lint must pass first.
       - name: Sign debug APK with dedicated stable GitHub signing identity

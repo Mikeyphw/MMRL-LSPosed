@@ -2,6 +2,9 @@ package io.github.mikeyphw.mmrl.lsposed
 
 import android.os.Build
 import android.os.Bundle
+import android.content.Context
+import android.content.ContextWrapper
+import androidx.lifecycle.ViewModelProvider
 import android.widget.ImageView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -67,12 +70,23 @@ import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** S01: independent, deliberately unprivileged Android shell and discovery. */
+/** Independent manager: unprivileged APK browsing; Vector reads only after Connect. */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { StandaloneApp() }
     }
+}
+
+private fun activityFrom(context: Context): ComponentActivity {
+    var cursor: Context = context
+    repeat(12) {
+        val activity = cursor as? ComponentActivity
+        if (activity != null) return activity
+        cursor = (cursor as? ContextWrapper)?.baseContext
+            ?: throw IllegalStateException("Expected an Activity context")
+    }
+    throw IllegalStateException("Unable to find Activity context")
 }
 
 private enum class Section(val label: Int, val icon: Int) {
@@ -109,12 +123,31 @@ private fun StandaloneApp() {
     MaterialTheme(colorScheme = colors, typography = Typography()) {
         var section by rememberSaveable { mutableStateOf(Section.HOME) }
         var settings by rememberSaveable { mutableStateOf(false) }
-        var selectedModule by remember { mutableStateOf<ModuleDiscovery.Candidate?>(null) }
+        val activity = remember(context) { activityFrom(context) }
+        val session = remember(activity) {
+            ViewModelProvider(activity)[VectorUiSession::class.java].also { stored ->
+                if (stored.vector is VectorState.Connecting)
+                    stored.vector = VectorState.Unavailable("Connect was interrupted; retry manually")
+                if (stored.scope is ScopeState.Loading)
+                    stored.scope = ScopeState.Unavailable("Scope read interrupted; reopen preview")
+            }
+        }
+        var selectedModule by session::selectedModule
         var candidates by remember { mutableStateOf<List<ModuleDiscovery.Candidate>?>(null) }
         var discoveryError by remember { mutableStateOf(false) }
         var refreshKey by remember { mutableIntStateOf(0) }
-        BackHandler(enabled = settings || selectedModule != null) {
-            if (selectedModule != null) selectedModule = null else settings = false
+        var vectorRefresh by remember { mutableIntStateOf(0) }
+        var vector by session::vector
+        var scopeOpen by session::scopeOpen
+        var scopeRequest by remember { mutableIntStateOf(0) }
+        var scope by session::scope
+        val scopeCounts = session.scopeCounts
+        BackHandler(enabled = settings || scopeOpen || selectedModule != null) {
+            when {
+                scopeOpen -> { scopeOpen = false; scope = ScopeState.Idle }
+                selectedModule != null -> selectedModule = null
+                else -> settings = false
+            }
         }
         LaunchedEffect(refreshKey) {
             discoveryError = false
@@ -123,23 +156,60 @@ private fun StandaloneApp() {
             }
             result.onSuccess { candidates = it }.onFailure { discoveryError = true; candidates = null }
         }
+        LaunchedEffect(vectorRefresh) {
+            if (vectorRefresh == 0) return@LaunchedEffect
+            vector = VectorState.Connecting
+            session.scopeCounts = emptyMap()
+            val result = withContext(Dispatchers.IO) {
+                runCatching { VectorReadOnly.inspect(context.applicationContext) }
+            }
+            vector = result.fold(onSuccess = { VectorState.Ready(it) },
+                onFailure = { VectorState.Unavailable(it.message?.take(120) ?: "Root access unavailable") })
+        }
+        LaunchedEffect(scopeRequest) {
+            if (scopeRequest == 0) return@LaunchedEffect
+            val pkg = selectedModule?.packageName ?: return@LaunchedEffect
+            scope = ScopeState.Loading
+            val result = withContext(Dispatchers.IO) {
+                runCatching { VectorReadOnly.scopes(context.applicationContext, pkg) }
+            }
+            if (scopeOpen && selectedModule?.packageName == pkg) {
+                result.onSuccess { session.scopeCounts = session.scopeCounts + (pkg to it.size) }
+                scope = result.fold(onSuccess = { ScopeState.Ready(it) },
+                    onFailure = { ScopeState.Unavailable(it.message?.take(120) ?: "Scope read failed") })
+            }
+        }
+        val combined = candidates?.let { installed ->
+            VectorReadOnly.mergeInstalled(installed, (vector as? VectorState.Ready)?.snapshot)
+        }
         AppScaffold(
             section = section,
-            onSectionChange = { section = it; selectedModule = null; settings = false },
+            onSectionChange = { section = it; selectedModule = null; scopeOpen = false; settings = false },
             settings = settings,
             onSettings = { settings = true },
-            onBack = { if (selectedModule != null) selectedModule = null else settings = false },
+            onBack = {
+                when {
+                    scopeOpen -> { scopeOpen = false; scope = ScopeState.Idle }
+                    selectedModule != null -> selectedModule = null
+                    else -> settings = false
+                }
+            },
             selectedModule = selectedModule,
+            scopePreview = scopeOpen,
         ) { innerPadding ->
             when {
                 settings -> SettingsPage(appearance, onAppearance = { appearance = it }, innerPadding)
-                selectedModule != null -> ModuleDetailPage(selectedModule!!, innerPadding)
-                section == Section.HOME -> HomePage(candidates, innerPadding, onBrowse = {
+                scopeOpen && selectedModule != null -> ScopeDraftPage(selectedModule!!, scope, innerPadding)
+                selectedModule != null -> ModuleDetailPage(selectedModule!!, vector, scopeCounts, innerPadding,
+                    onScope = { scope = ScopeState.Idle; scopeOpen = true; scopeRequest++ })
+                section == Section.HOME -> HomePage(combined, vector, innerPadding, onBrowse = {
                     section = Section.MODULES
-                })
+                }, onConnect = { vectorRefresh++ })
                 section == Section.MODULES -> ModuleListPage(
-                    candidates, discoveryError, innerPadding,
-                    onRefresh = { candidates = null; refreshKey++ }, onOpen = { selectedModule = it },
+                    combined, discoveryError, vector, scopeCounts, innerPadding,
+                    onRefresh = { candidates = null; refreshKey++;
+                        if (vector is VectorState.Ready) vectorRefresh++ },
+                    onOpen = { selectedModule = it; scope = ScopeState.Idle; scopeOpen = false },
                 )
                 section == Section.APPS -> PlaceholderPage(
                     R.drawable.ic_apps, R.string.device_apps_title, R.string.device_apps_description, innerPadding)
@@ -161,9 +231,10 @@ private fun AppScaffold(
     onSettings: () -> Unit,
     onBack: () -> Unit,
     selectedModule: ModuleDiscovery.Candidate?,
+    scopePreview: Boolean,
     content: @Composable (PaddingValues) -> Unit,
 ) {
-    val nested = settings || selectedModule != null
+    val nested = settings || selectedModule != null || scopePreview
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -171,6 +242,7 @@ private fun AppScaffold(
                     Text(
                         when {
                             settings -> stringResource(R.string.settings)
+                            scopePreview -> stringResource(R.string.scope_preview)
                             selectedModule != null -> selectedModule.name
                             else -> stringResource(section.label)
                         },
@@ -210,8 +282,10 @@ private fun AppScaffold(
 @Composable
 private fun HomePage(
     candidates: List<ModuleDiscovery.Candidate>?,
+    vector: VectorState,
     padding: PaddingValues,
     onBrowse: () -> Unit,
+    onConnect: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(padding),
@@ -242,8 +316,28 @@ private fun HomePage(
                     }
                     Spacer(Modifier.width(14.dp))
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(stringResource(R.string.not_connected), style = MaterialTheme.typography.titleMedium)
-                        Text(stringResource(R.string.framework_details), style = MaterialTheme.typography.bodySmall,
+                        Text(when (vector) {
+                            VectorState.Disconnected -> "Not connected"
+                            VectorState.Connecting -> "Connecting to Vector…"
+                            is VectorState.Ready -> "Vector v2.2 · API ${vector.snapshot.apiVersion}"
+                            is VectorState.Unavailable -> "Connection unavailable"
+                        }, style = MaterialTheme.typography.titleMedium)
+                        Text(when (vector) {
+                            VectorState.Disconnected -> "Connect explicitly to inspect saved module configuration."
+                            VectorState.Connecting -> "Requesting read-only framework access…"
+                            is VectorState.Ready -> "${vector.snapshot.enabledCount} enabled / " +
+                                "${vector.snapshot.modules.size} configured modules. Hooks not verified."
+                            is VectorState.Unavailable -> vector.reason
+                        }, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        OutlinedButton(onClick = onConnect, enabled = vector !is VectorState.Connecting) {
+                            Text(if (vector is VectorState.Ready) "Refresh Vector" else "Connect to Vector")
+                        }
+                        if (vector is VectorState.Ready) Text(
+                            "Saved configuration checked at " +
+                                java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT)
+                                    .format(java.util.Date(vector.snapshot.observedAtMillis)),
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -274,6 +368,8 @@ private fun HomePage(
 private fun ModuleListPage(
     candidates: List<ModuleDiscovery.Candidate>?,
     hasError: Boolean,
+    vector: VectorState,
+    scopeCounts: Map<String, Int>,
     padding: PaddingValues,
     onRefresh: () -> Unit,
     onOpen: (ModuleDiscovery.Candidate) -> Unit,
@@ -283,8 +379,9 @@ private fun ModuleListPage(
     val visible = remember(candidates, query, filter) {
         candidates.orEmpty().filter { item ->
             (filter == ModuleFilter.ALL || (filter == ModuleFilter.MODERN &&
-                item.format != ModuleDiscovery.Format.LEGACY) || (filter == ModuleFilter.LEGACY &&
-                item.format != ModuleDiscovery.Format.MODERN)) &&
+                item.format in setOf(ModuleDiscovery.Format.MODERN, ModuleDiscovery.Format.BOTH)) ||
+                (filter == ModuleFilter.LEGACY &&
+                item.format in setOf(ModuleDiscovery.Format.LEGACY, ModuleDiscovery.Format.BOTH))) &&
                 (item.name.contains(query, ignoreCase = true) ||
                     item.packageName.contains(query, ignoreCase = true))
         }
@@ -338,6 +435,24 @@ private fun ModuleListPage(
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(formatLabel(module.format), style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary)
+                            if (module.versionName.isNotBlank()) Text(
+                                "Version ${module.versionName}", style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            val stored = (vector as? VectorState.Ready)?.snapshot?.modules?.get(module.packageName)
+                            if (stored != null) Text(
+                                if (stored.enabled) "Enabled in Vector · saved state"
+                                else "Disabled in Vector · saved state",
+                                color = if (stored.enabled) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelMedium)
+                            if (stored != null) Text(
+                                scopeCounts[module.packageName]?.let { "$it saved scope targets (last read)" }
+                                    ?: "Saved scope count not loaded",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            else if (vector is VectorState.Ready) Text("Not in Vector inventory",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -347,7 +462,8 @@ private fun ModuleListPage(
 }
 
 @Composable
-private fun ModuleDetailPage(candidate: ModuleDiscovery.Candidate, padding: PaddingValues) {
+private fun ModuleDetailPage(candidate: ModuleDiscovery.Candidate, vector: VectorState,
+    scopeCounts: Map<String, Int>, padding: PaddingValues, onScope: () -> Unit) {
     LazyColumn(modifier = Modifier.fillMaxSize().padding(padding),
         contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
@@ -355,10 +471,20 @@ private fun ModuleDetailPage(candidate: ModuleDiscovery.Candidate, padding: Padd
                 Column(Modifier.fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     InstalledAppIcon(candidate.packageName, size = 68)
                     Text(candidate.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-                    Text(stringResource(R.string.installed_not_enabled),
+                    val stored = (vector as? VectorState.Ready)?.snapshot?.modules?.get(candidate.packageName)
+                    Text(when {
+                        stored == null -> "Saved enabled state unknown"
+                        stored.enabled -> "Enabled in Vector saved configuration"
+                        else -> "Disabled in Vector saved configuration"
+                    }, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Live hooks are not verified by this manager.",
+                        style = MaterialTheme.typography.bodySmall)
+                    if (stored != null) Text(
+                        scopeCounts[candidate.packageName]?.let { "$it saved scope targets (last read)" }
+                            ?: "Saved scope count unknown until preview is opened",
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(stringResource(R.string.config_not_verified), style = MaterialTheme.typography.bodySmall)
-                    OutlinedButton(onClick = {}, enabled = false) {
+                    OutlinedButton(onClick = onScope, enabled = stored != null) {
                         Text(stringResource(R.string.scope_preview))
                     }
                 }
@@ -369,6 +495,16 @@ private fun ModuleDetailPage(candidate: ModuleDiscovery.Candidate, padding: Padd
             Spacer(Modifier.height(8.dp))
             DetailLine(stringResource(R.string.package_name), candidate.packageName)
             DetailLine(stringResource(R.string.module_format), formatLabel(candidate.format))
+            DetailLine("APK version", candidate.versionName.ifBlank { "Unknown" })
+            if (candidate.minApiVersion > 0) DetailLine("Minimum Xposed API",
+                candidate.minApiVersion.toString())
+            if (candidate.targetApiVersion > 0) DetailLine("Target Xposed API",
+                candidate.targetApiVersion.toString())
+            if (candidate.description.isNotBlank()) Text(candidate.description,
+                style = MaterialTheme.typography.bodyMedium)
+            if (candidate.declaredScopes.isNotEmpty()) DetailLine("Declared scope",
+                "${candidate.declaredScopes.size} suggested targets" +
+                if (candidate.staticScope) " (static)" else "")
             Text(stringResource(R.string.scope_future), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -460,4 +596,5 @@ private fun formatLabel(format: ModuleDiscovery.Format): String = when (format) 
     ModuleDiscovery.Format.MODERN -> stringResource(R.string.modern)
     ModuleDiscovery.Format.LEGACY -> stringResource(R.string.legacy)
     ModuleDiscovery.Format.BOTH -> "${stringResource(R.string.modern)} + ${stringResource(R.string.legacy)}"
+    ModuleDiscovery.Format.UNKNOWN -> "No installed APK metadata"
 }

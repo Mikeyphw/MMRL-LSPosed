@@ -31,6 +31,7 @@ android {
 
     buildFeatures {
         compose = true
+        aidl = true // narrow read-only Binder IPC on AGP 9
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
@@ -50,5 +51,9 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.coroutines.android)
+    implementation(libs.libsu.core)
+    implementation(libs.libsu.service)
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
     debugImplementation(libs.compose.ui.tooling)
 }

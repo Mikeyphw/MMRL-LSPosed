@@ -22,6 +22,7 @@ DEVTOOL_SHA = "b164463db51e2cffd12f753043b9e55a08cc43ae"
 PROFILE = "ubuntu-24.04-x64"
 APK_TASK = [":app:assembleDebug"]
 LINT_TASK = [":app:lintDebug"]
+TEST_TASK = [":app:testDebugUnitTest"]
 OUTPUT = "app/build/outputs/apk/debug/app-debug.apk"
 PACKAGE = "io.github.mikeyphw.mmrl.lsposed.debug"
 
@@ -51,11 +52,12 @@ def checked_graph(root: Path) -> dict:
     graph = compile_graph(root, target=TARGET, workflow=WORKFLOW,
                           devtool_sha=DEVTOOL_SHA, host_profiles=PROFILE)
     nodes = graph["jobs"]
-    if [node.get("id") for node in nodes] != ["node-01", "node-02"]:
+    if [node.get("id") for node in nodes] != ["node-01", "node-02", "node-03"]:
         raise ValueError("Expected exactly two independent native DAG nodes")
     for node, name, tasks, outputs in (
         (nodes[0], "assemble_debug", APK_TASK, [OUTPUT]),
         (nodes[1], "lint_debug", LINT_TASK, []),
+        (nodes[2], "unit_debug", TEST_TASK, []),
     ):
         review = node.get("android_review") or {}
         if (node.get("provider") != "android-gradle"
@@ -135,7 +137,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("plan", "run", "verify"))
     parser.add_argument("--root", default=".")
-    parser.add_argument("--node", choices=("apk", "lint"))
+    parser.add_argument("--node", choices=("apk", "lint", "test"))
     parser.add_argument("--inputs")
     parser.add_argument("--outputs")
     parser.add_argument("--evidence")
@@ -150,7 +152,7 @@ def main() -> int:
             "schema": "mmrl.lsposed.s01.devtool-plan.v1",
             "source_sha": source, "devtool_sha": DEVTOOL_SHA,
             "graph_sha256": graph["graph_sha256"],
-            "node_ids": {"apk": "node-01", "lint": "node-02"},
+            "node_ids": {"apk": "node-01", "lint": "node-02", "test": "node-03"},
             "package": PACKAGE, "output": OUTPUT,
             "release_qualified": False, "device_qualified": False,
         }
