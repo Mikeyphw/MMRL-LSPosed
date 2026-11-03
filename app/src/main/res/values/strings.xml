@@ -28,7 +28,7 @@
     <string name="scope_preview">Scope editor</string>
     <string name="scope_future">Scope editing is unavailable in this read-only foundation. No changes can be made.</string>
     <string name="device_apps_title">App targets</string>
-    <string name="device_apps_description">Explore which apps a module targets after Vector's verified scope adapter is connected.</string>
+    <string name="device_apps_description">Explore which apps a module targets after Vector\'s verified scope adapter is connected.</string>
     <string name="discover_title">Discover modules</string>
     <string name="discover_description">Trusted catalogs and verified source metadata will appear here. No third-party repository is pretrusted.</string>
     <string name="downloads_title">Downloads</string>

@@ -49,14 +49,47 @@ class S01SourceContracts(unittest.TestCase):
         self.assertIn('gradle_tasks = [":app:assembleDebug"]', config)
         self.assertIn('gradle_tasks = [":app:lintDebug"]', config)
 
-    def test_locales_have_same_resource_names(self):
-        en = ET.parse(ROOT / "app/src/main/res/values/strings.xml").getroot()
-        br = ET.parse(ROOT / "app/src/main/res/values-pt-rBR/strings.xml").getroot()
-        self.assertEqual([e.get("name") for e in en], [e.get("name") for e in br])
+    def test_english_only_resources_and_symbols_exist(self):
+        resource_root = ROOT / "app/src/main/res"
+        en = ET.parse(resource_root / "values/strings.xml").getroot()
+        translations = sorted(resource_root.glob("values-*/strings.xml"))
+        self.assertEqual(translations, [],
+                         "S01 is English-only; unexpected localized string resources")
         src = (ROOT / "app/src/main/java/io/github/mikeyphw/mmrl/lsposed/MainActivity.kt").read_text()
         symbols = set(re.findall(r"R\.string\.([A-Za-z][A-Za-z0-9_]*)", src))
         defined = {e.get("name") for e in en}
         self.assertFalse(symbols - defined, symbols - defined)
+
+    def test_android_resource_ascii_apostrophes_are_escaped(self):
+        # XML parsers permit raw ASCII apostrophes, but Android AAPT does not
+        # accept them inside ordinary <string> resource bodies.
+        resource = ET.parse(ROOT / "app/src/main/res/values/strings.xml").getroot()
+        for item in resource.findall("string"):
+            value = "".join(item.itertext())
+            if value.startswith('"') and value.endswith('"'):
+                continue
+            with self.subTest(resource=item.get("name")):
+                self.assertFalse(self._has_raw_apostrophe(value),
+                                 f"Unescaped apostrophe in {item.get('name')}")
+
+    @staticmethod
+    def _has_raw_apostrophe(value: str) -> bool:
+        for index, char in enumerate(value):
+            if char != "'":
+                continue
+            n = 0
+            at = index - 1
+            while at >= 0 and value[at] == "\\":
+                n += 1
+                at -= 1
+            if n % 2 == 0:
+                return True
+        return False
+
+    def test_apostrophe_detector_examples(self):
+        self.assertTrue(self._has_raw_apostrophe("Vector's"))
+        self.assertFalse(self._has_raw_apostrophe("Vector\\'s"))
+        self.assertTrue(self._has_raw_apostrophe("Vector\\\\'s"))
 
     def test_drawable_references_exist(self):
         src = (ROOT / "app/src/main/java/io/github/mikeyphw/mmrl/lsposed/MainActivity.kt").read_text()
