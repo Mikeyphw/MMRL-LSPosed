@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Required for user-initiated installed Xposed module discovery. S01 is read-only. -->
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <!-- User-initiated installed Xposed module discovery requires inspecting arbitrary
+         installed application APK metadata, not just packages with known names.
+         Android <queries> cannot enumerate all such modules ahead of time.
+         This is read-only and must be reassessed for any Play distribution. -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
 
     <application
         android:allowBackup="false"

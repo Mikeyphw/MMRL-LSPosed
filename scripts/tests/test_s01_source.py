@@ -28,6 +28,24 @@ class S01SourceContracts(unittest.TestCase):
         self.assertEqual(len(application.findall("receiver")), 0)
         self.assertEqual(len(application.findall("provider")), 0)
 
+    def test_package_visibility_scope_is_documented(self):
+        manifest_path = ROOT / "app/src/main/AndroidManifest.xml"
+        source = manifest_path.read_text()
+        root = ET.fromstring(source)
+        ns = "{http://schemas.android.com/apk/res/android}"
+        tools_ns = "{http://schemas.android.com/tools}"
+        permissions = root.findall("uses-permission")
+        self.assertEqual(len(permissions), 1)
+        self.assertEqual(permissions[0].get(ns + "name"),
+                         "android.permission.QUERY_ALL_PACKAGES")
+        self.assertEqual(permissions[0].get(tools_ns + "ignore"),
+                         "QueryAllPackagesPermission")
+        self.assertIn("arbitrary", source)
+        self.assertIn("reassessed for any Play distribution", source)
+        scanner = (ROOT / "app/src/main/java/io/github/mikeyphw/mmrl/lsposed/ModuleDiscovery.kt").read_text()
+        self.assertIn("getInstalledApplications", scanner)
+        self.assertIn("PackageManager.GET_META_DATA", scanner)
+
     def test_no_cli_or_root_transport(self):
         source = "\n".join(p.read_text() for p in (ROOT / "app/src/main/java").rglob("*.kt"))
         for pattern in (r'ProcessBuilder\s*\(', r'Runtime\.getRuntime\s*\(',
