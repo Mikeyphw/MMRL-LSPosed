@@ -122,4 +122,55 @@ class S08InstrumentationContracts(unittest.TestCase):
                     mod.ensure_installed('serial',{mod.APP:target},Path(tmp))
                 adb.assert_not_called()
 
+
+    def test_android_instrumentation_success_without_optional_exit_marker(self):
+        from types import SimpleNamespace
+        output = SimpleNamespace(returncode=0, stdout='INSTRUMENTATION_STATUS_CODE: -1\n\nTime: 48.201\n\nOK (1 test)\n',stderr='')
+        self.assertTrue(mod.instrumentation_passed(output))
+        with patch.object(mod,'adb',return_value=output):
+            self.assertIn('OK (1 test)',mod.instrumentation('localhost:5555','S08ReadOnlyDeviceTest'))
+
+    def test_instrumentation_rejects_false_successes(self):
+        from types import SimpleNamespace
+        cases = [
+            (0,'Time: 1\nOK (1 test)\nINSTRUMENTATION_CODE: -1\n','',True),
+            (0,'Time: 1\nOK (1 test)\nINSTRUMENTATION_CODE: 0\n','',False),
+            (0,'Time: 1\nOK (1 test)\nINSTRUMENTATION_RESULT: shortMsg=Process crashed.\n','',False),
+            (0,'Time: 1\nFAILURES!!!\n','',False),
+            (0,'Time: 1\nOK (2 tests)\n','',False),
+            (0,'INSTRUMENTATION_CODE: -1\n','',False),
+            (1,'Time: 1\nOK (1 test)\n','',False),
+            (0,'Time: 1\nOK (1 test)\n','INSTRUMENTATION_FAILED',False),
+        ]
+        for rc, out, err, expected in cases:
+            with self.subTest(rc=rc,output=out,stderr=err):
+                self.assertEqual(mod.instrumentation_passed(SimpleNamespace(returncode=rc,stdout=out,stderr=err)),expected)
+
+    def test_attested_app_source_only_allows_host_runner_changes(self):
+        from types import SimpleNamespace
+        from unittest.mock import call
+        source='a'*40
+        current='b'*40
+        def accept(parts):
+            cmd=' '.join(parts)
+            if 'rev-parse HEAD' in cmd:return SimpleNamespace(returncode=0,stdout=current)
+            if 'merge-base --is-ancestor' in cmd:return SimpleNamespace(returncode=0,stdout='')
+            if 'diff --name-only --no-renames' in cmd:
+                return SimpleNamespace(returncode=0,stdout='scripts/s08_device_lab.py\nscripts/tests/test_s08_instrumentation.py\n')
+            if 'diff --name-only' in cmd:return SimpleNamespace(returncode=0,stdout='')
+            raise AssertionError(cmd)
+        with patch.object(mod,'proc',side_effect=lambda *args,**kw:accept(args)):
+            mod.verify_checkout_source(Path('/tmp/MMRL-LSPosed'),source)
+
+        def reject(parts):
+            cmd=' '.join(parts)
+            if 'rev-parse HEAD' in cmd:return SimpleNamespace(returncode=0,stdout=current)
+            if 'merge-base --is-ancestor' in cmd:return SimpleNamespace(returncode=0,stdout='')
+            if 'diff --name-only --no-renames' in cmd:
+                return SimpleNamespace(returncode=0,stdout='scripts/s08_device_lab.py\napp/src/main/AndroidManifest.xml\n')
+            raise AssertionError(cmd)
+        with patch.object(mod,'proc',side_effect=lambda *args,**kw:reject(args)):
+            with self.assertRaisesRegex(RuntimeError,'unrelated code'):
+                mod.verify_checkout_source(Path('/tmp/MMRL-LSPosed'),source)
+
 if __name__=='__main__':unittest.main()

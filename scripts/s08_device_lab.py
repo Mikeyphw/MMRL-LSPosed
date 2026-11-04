@@ -80,9 +80,40 @@ def validate_source(run_id):
     attempt=int(r.get('run_attempt',0))
     if attempt < 1: raise RuntimeError('Missing run attempt')
     checkout=Path.home()/'Code'/'MMRL-LSPosed'
-    if proc('git','-C',str(checkout),'rev-parse','HEAD').stdout.strip()!=r['head_sha']:
-        raise RuntimeError('Local MMRL-LSPosed checkout HEAD does not match GitHub source')
+    verify_checkout_source(checkout, r['head_sha'])
     return r['head_sha'],attempt
+
+
+# A later host-runner-only fix does not alter the Android APKs, test
+# instrumentation, libxposed module, or the Vector write implementation.
+# Allow an already-attested same-run APK pair ONLY when the exact CI source is
+# an ancestor and every committed difference is among these host-only paths.
+HOST_ONLY_COMPAT_PATHS = frozenset({
+    'scripts/s08_device_lab.py',
+    'scripts/tests/test_s08_instrumentation.py',
+})
+
+
+def verify_checkout_source(checkout: Path, source: str):
+    current = proc('git','-C',str(checkout),'rev-parse','HEAD').stdout.strip()
+    if current == source:
+        return
+    if not SHA40.fullmatch(current):
+        raise RuntimeError('Invalid local checkout HEAD')
+    ancestor = proc('git','-C',str(checkout),'merge-base','--is-ancestor',source,current,check=False)
+    if ancestor.returncode:
+        raise RuntimeError('GitHub APK source is not an ancestor of local checkout')
+    changed = set(proc('git','-C',str(checkout),'diff','--name-only','--no-renames',
+                       source,current).stdout.splitlines())
+    if not changed or changed - HOST_ONLY_COMPAT_PATHS:
+        raise RuntimeError('Checkout changed app/test binaries or unrelated code since GitHub build')
+    # This guards changes committed after the provenance run; uncommitted
+    # changes to binary/test inputs must not be used with the old artifact.
+    binary_dirty = proc('git','-C',str(checkout),'diff','--name-only',source,'--',
+                        'app','hook-lab-module','hook-lab-target',
+                        'settings.gradle.kts','gradle','.github/workflows',check=True)
+    if binary_dirty.stdout.strip():
+        raise RuntimeError('App or test inputs differ from attested GitHub source')
 
 
 def download_pairs(run_id,attempt,source,output):
@@ -235,10 +266,33 @@ def instrumentation(serial,classname,params=None):
         args.extend(('-e',key,value))
     args.append(TEST+'/'+RUNNER)
     result=adb(serial,*args,timeout=240,check=False)
-    if result.returncode or 'FAILURES!!!' in result.stdout or 'INSTRUMENTATION_FAILED' in result.stdout or \
-       'INSTRUMENTATION_CODE: -1' not in result.stdout:
-        raise RuntimeError('Device AndroidTest did not report success: '+result.stdout[-450:])
+    if not instrumentation_passed(result):
+        raise RuntimeError('Device AndroidTest did not report success (adb rc=' +
+                           str(result.returncode) + '): ' + (result.stdout + result.stderr)[-650:])
     return result.stdout
+
+
+def instrumentation_passed(result):
+    """Require JUnit's one-test success, not an optional am-instrument marker.
+
+    On some Android versions, `am instrument -w` ends with `OK (1 test)` but
+    does not print `INSTRUMENTATION_CODE: -1`. A nonzero or conflicting explicit
+    code, a crash marker, failed assertions, or missing exact JUnit success
+    always refuses. The caller additionally checks the app's persisted JSON
+    evidence before accepting the operation (and read-back for writes).
+    """
+    stdout = result.stdout or ''
+    stderr = result.stderr or ''
+    if result.returncode != 0 or any(x in stdout + stderr for x in (
+        'FAILURES!!!', 'INSTRUMENTATION_FAILED', 'INSTRUMENTATION_ABORTED',
+        'INSTRUMENTATION_RESULT: shortMsg=', 'INSTRUMENTATION_RESULT: longMsg=',
+        'Process crashed.', 'Test run failed',
+    )):
+        return False
+    codes = re.findall(r'(?m)^INSTRUMENTATION_CODE:\s*(-?\d+)\s*$', stdout)
+    if codes and (len(codes) != 1 or codes[0] != '-1'):
+        return False
+    return re.search(r'(?m)^OK \(1 test\)\s*$', stdout) is not None
 
 
 def app_evidence(serial,filename):
