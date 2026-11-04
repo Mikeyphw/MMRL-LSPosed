@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import subprocess
 import sys
 
@@ -301,6 +302,30 @@ def app_evidence(serial,filename):
     except json.JSONDecodeError as e:raise RuntimeError('Missing device evidence file') from e
 
 
+
+def provision_lab_token(serial, ticket):
+    """Install a private, one-use lab ticket without adb-shell redirection escape.
+
+    adb shell concatenates remote arguments into a command line. The *entire*
+    inner `sh -c` script must therefore be quoted for the outer device shell;
+    otherwise the `>` operator may execute outside `run-as`.
+    """
+    expected = rf'[a-f0-9]{{48}}:[a-f0-9]{{40}}:{re.escape(MODULE)}:{re.escape(TARGET)}'
+    if not re.fullmatch(expected, ticket):
+        raise RuntimeError('Invalid isolated S08 authorization ticket')
+    path = 'files/s08_lab_write_token'
+    command = (
+        f'umask 077; set -C; if [ -e {path} ]; then exit 81; fi; '
+        f'printf %s {shlex.quote(ticket)} > {path}'
+    )
+    # shlex.quote prevents Android's *outer* shell from executing the `>`.
+    # Only the app-UID `sh -c` may create the token in app-private files/.
+    adb(serial, 'shell', 'run-as', APP, 'sh', '-c', shlex.quote(command))
+    observed = adb(serial, 'shell', 'run-as', APP, 'cat', path).stdout
+    if observed != ticket:
+        raise RuntimeError('Private token read-back mismatch; write test refused')
+
+
 def run(args):
     if args.recover_journal:
         journal_path=Path(args.recover_journal).expanduser().resolve(strict=True)
@@ -355,9 +380,13 @@ def run(args):
     atomic_json(journal_path,journal,exclusive=True)
     nonce=secrets.token_hex(24)
     ticket=f'{nonce}:{source}:{MODULE}:{TARGET}'
-    # Static shell syntax. All interpolated parts are lowercase hex and fixed package IDs.
-    cmd=f"umask 077; printf %s '{ticket}' > files/s08_lab_write_token"
-    adb(serial,'shell','run-as',APP,'sh','-c',cmd)
+    # Provision only in the app UID; a bad shell invocation is a PRE-WRITE refusal.
+    try:
+        provision_lab_token(serial, ticket)
+    except Exception:
+        journal['phase']='TOKEN_PROVISIONING_FAILED_NO_VECTOR_WRITES'
+        atomic_json(journal_path,journal)
+        raise
     journal['phase']='INSTRUMENTATION_STARTED';atomic_json(journal_path,journal)
     try:
         log=instrumentation(serial,'S08LabWriteDeviceTest',{

@@ -173,4 +173,57 @@ class S08InstrumentationContracts(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'unrelated code'):
                 mod.verify_checkout_source(Path('/tmp/MMRL-LSPosed'),source)
 
+
+
+    def test_token_provision_quoted_outer_shell_and_readback(self):
+        import os
+        import subprocess
+        import shlex
+        from types import SimpleNamespace
+        ticket=('a'*48)+':'+('b'*40)+':'+mod.MODULE+':'+mod.TARGET
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory)/'files').mkdir()
+            calls=[]
+            def fake_adb(serial,*args,**kwargs):
+                calls.append(args)
+                if args[:5]==('shell','run-as',mod.APP,'sh','-c'):
+                    # Simulate Android's outer `adb shell` argument concatenation.
+                    # The remote shell must hand the redirection to inner sh -c.
+                    cmd='sh -c '+args[5]
+                    response=subprocess.run(['sh','-c',cmd],cwd=directory,capture_output=True,text=True)
+                    if response.returncode:
+                        raise RuntimeError(response.stderr or 'token creation refused')
+                    return SimpleNamespace(stdout=response.stdout)
+                if args==('shell','run-as',mod.APP,'cat','files/s08_lab_write_token'):
+                    return SimpleNamespace(stdout=(Path(directory)/'files/s08_lab_write_token').read_text())
+                raise AssertionError('Unexpected ADB command: '+str(args))
+            with patch.object(mod,'adb',side_effect=fake_adb):
+                mod.provision_lab_token('localhost:5555',ticket)
+                token=Path(directory)/'files/s08_lab_write_token'
+                self.assertEqual(token.read_text(),ticket)
+                self.assertEqual(token.stat().st_mode & 0o777,0o600)
+                # Token must not be silently overwritten if an earlier
+                # session left one pending.
+                with self.assertRaisesRegex(RuntimeError,'token creation refused'):
+                    mod.provision_lab_token('localhost:5555',ticket)
+                self.assertEqual(token.read_text(),ticket)
+            self.assertEqual(len(calls),3)
+
+    def test_token_provision_refuses_unscoped_ticket_and_bad_readback(self):
+        from types import SimpleNamespace
+        with patch.object(mod,'adb') as fake:
+            with self.assertRaisesRegex(RuntimeError,'Invalid isolated'):
+                mod.provision_lab_token('localhost:5555','bogus')
+            fake.assert_not_called()
+        ticket=('a'*48)+':'+('b'*40)+':'+mod.MODULE+':'+mod.TARGET
+        with patch.object(mod,'adb',side_effect=[SimpleNamespace(stdout=''),SimpleNamespace(stdout='unexpected')]):
+            with self.assertRaisesRegex(RuntimeError,'read-back mismatch'):
+                mod.provision_lab_token('localhost:5555',ticket)
+
+    def test_host_refuses_write_after_failed_token_provision(self):
+        src = LAB.read_text()
+        self.assertIn("journal['phase']='TOKEN_PROVISIONING_FAILED_NO_VECTOR_WRITES'",src)
+        self.assertIn('provision_lab_token(serial, ticket)',src)
+        self.assertNotIn("adb(serial,'shell','run-as',APP,'sh','-c',cmd)",src)
+
 if __name__=='__main__':unittest.main()
