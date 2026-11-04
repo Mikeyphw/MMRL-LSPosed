@@ -48,10 +48,20 @@ class S09EmulatorUiTest {
     @Test fun navigationShowsAppsDiscoverAndDownloads() {
         compose.onNodeWithTag("nav_apps").performClick()
         compose.onNodeWithText("App targets").assertExists()
+        compose.onNodeWithTag("apps_build_index").assertExists().assertIsNotEnabled()
+        compose.onNodeWithText("Connect to Vector on Home first. No root read happens here automatically.").assertExists()
         compose.onNodeWithTag("nav_discover").performClick()
         compose.onNodeWithText("Discover modules").assertExists()
+        compose.onNodeWithTag("discover_search").assertExists()
+        compose.onNodeWithTag("discover_query").performTextInput("lsposed")
+        compose.onNodeWithTag("discover_query").assertTextContains("lsposed")
         compose.onNodeWithTag("nav_downloads").performClick()
-        compose.onNodeWithText("Future release and artifact downloads will show provenance, hashes and installation consent.").assertExists()
+        compose.onNodeWithText("Verified downloads").assertExists()
+        compose.onNodeWithTag("downloads_load").assertExists()
+        compose.onNodeWithText("CI artifacts").performClick()
+        compose.onNodeWithText("Load recent GitHub Actions runs. Artifacts open on GitHub and may require sign-in.").assertExists()
+        compose.onNodeWithText("Releases").performClick()
+        compose.onNodeWithText("Load the official releases when you're ready.").assertExists()
         assertNoImplicitVectorConnection()
     }
 

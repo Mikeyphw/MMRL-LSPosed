@@ -104,6 +104,7 @@ private enum class Section(val label: Int, val icon: Int) {
 
 private enum class Appearance { SYSTEM, LIGHT, DARK, AMOLED }
 private enum class ModuleFilter { ALL, MODERN, LEGACY }
+private enum class ModuleStateFilter { ALL, ENABLED, DISABLED }
 private val Accent = Color(0xFF587FC7)
 
 @Composable
@@ -145,6 +146,8 @@ private fun StandaloneApp() {
         var refreshKey by remember { mutableIntStateOf(0) }
         var vectorRefresh by remember { mutableIntStateOf(0) }
         var vector by session::vector
+        var appsIndex by session::appsIndex
+        var appsRequest by remember { mutableIntStateOf(0) }
         var scopeOpen by session::scopeOpen
         var scopeRequest by remember { mutableIntStateOf(0) }
         var scope by session::scope
@@ -164,9 +167,25 @@ private fun StandaloneApp() {
             }
             result.onSuccess { candidates = it }.onFailure { discoveryError = true; candidates = null }
         }
+        LaunchedEffect(appsRequest) {
+            if (appsRequest == 0) return@LaunchedEffect
+            val snapshot = (vector as? VectorState.Ready)?.snapshot ?: return@LaunchedEffect
+            appsIndex = AppsIndexState.Loading
+            val result = withContext(Dispatchers.IO) {
+                runCatching { AppsReverseIndex.inspect(context.applicationContext, snapshot) }
+            }
+            // A refresh or mutation invalidates the older snapshot while the IO read is running.
+            if ((vector as? VectorState.Ready)?.snapshot === snapshot) {
+                appsIndex = result.fold(
+                    onSuccess = { AppsIndexState.Ready(it) },
+                    onFailure = { AppsIndexState.Unavailable(it.message?.take(180) ?: "Scope index unavailable") },
+                )
+            }
+        }
         LaunchedEffect(vectorRefresh) {
             if (vectorRefresh == 0) return@LaunchedEffect
             vector = VectorState.Connecting
+            appsIndex = AppsIndexState.Idle
             session.scopeCounts = emptyMap()
             val result = withContext(Dispatchers.IO) {
                 runCatching { VectorReadOnly.inspect(context.applicationContext) }
@@ -208,7 +227,8 @@ private fun StandaloneApp() {
             scopePreview = scopeOpen,
         ) { innerPadding ->
             when {
-                settings -> SettingsPage(appearance, onAppearance = { appearance = it }, innerPadding)
+                settings -> SettingsPage(appearance, onAppearance = { appearance = it },
+                    vector = vector, onRefreshVector = { vectorRefresh++ }, padding = innerPadding)
                 scopeOpen && selectedModule != null -> {
                     val currentModule = selectedModule!!
                     ScopeDraftPage(currentModule, scope, innerPadding,
@@ -217,6 +237,7 @@ private fun StandaloneApp() {
                         onWriteBusy = { session.writeBusy = it },
                         onCommitted = { result ->
                             vector = VectorState.Ready(result.snapshot)
+                            appsIndex = AppsIndexState.Idle
                             scope = ScopeState.Ready(result.scopes)
                             session.scopeCounts = session.scopeCounts +
                                 (currentModule.packageName to result.scopes.size)
@@ -229,6 +250,7 @@ private fun StandaloneApp() {
                         onWriteBusy = { session.writeBusy = it },
                         onCommitted = { result ->
                             vector = VectorState.Ready(result.snapshot)
+                            appsIndex = AppsIndexState.Idle
                             session.scopeCounts = session.scopeCounts +
                                 (currentModule.packageName to result.scopes.size)
                         })
@@ -237,6 +259,7 @@ private fun StandaloneApp() {
                     section = Section.MODULES
                 }, onConnect = { vectorRefresh++ }, onReconciled = { snapshot ->
                     vector = VectorState.Ready(snapshot)
+                    appsIndex = AppsIndexState.Idle
                     session.scopeCounts = emptyMap()
                 })
                 section == Section.MODULES -> ModuleListPage(
@@ -245,12 +268,17 @@ private fun StandaloneApp() {
                         if (vector is VectorState.Ready) vectorRefresh++ },
                     onOpen = { selectedModule = it; scope = ScopeState.Idle; scopeOpen = false },
                 )
-                section == Section.APPS -> PlaceholderPage(
-                    R.drawable.ic_apps, R.string.device_apps_title, R.string.device_apps_description, innerPadding)
-                section == Section.DISCOVER -> PlaceholderPage(
-                    R.drawable.ic_discover, R.string.discover_title, R.string.discover_description, innerPadding)
-                else -> PlaceholderPage(
-                    R.drawable.ic_downloads, R.string.downloads_title, R.string.downloads_description, innerPadding)
+                section == Section.APPS -> AppsReversePage(
+                    appsIndex, vector is VectorState.Ready, innerPadding,
+                    onBuild = { if (vector is VectorState.Ready) appsRequest++ },
+                    onOpenModule = { pkg ->
+                        combined?.firstOrNull { it.packageName == pkg }?.let {
+                            selectedModule = it; scope = ScopeState.Idle; scopeOpen = false
+                        }
+                    },
+                )
+                section == Section.DISCOVER -> DiscoverPage(innerPadding)
+                else -> DownloadsPage(innerPadding)
             }
         }
     }
@@ -415,15 +443,24 @@ private fun ModuleListPage(
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(ModuleFilter.ALL) }
-    val visible = remember(candidates, query, filter) {
-        candidates.orEmpty().filter { item ->
+    var savedFilter by rememberSaveable { mutableStateOf(ModuleStateFilter.ALL) }
+    var enabledFirst by rememberSaveable { mutableStateOf(false) }
+    val saved = (vector as? VectorState.Ready)?.snapshot?.modules
+    val visible = remember(candidates, query, filter, savedFilter, enabledFirst, saved) {
+        val filtered = candidates.orEmpty().filter { item ->
             (filter == ModuleFilter.ALL || (filter == ModuleFilter.MODERN &&
                 item.format in setOf(ModuleDiscovery.Format.MODERN, ModuleDiscovery.Format.BOTH)) ||
                 (filter == ModuleFilter.LEGACY &&
                 item.format in setOf(ModuleDiscovery.Format.LEGACY, ModuleDiscovery.Format.BOTH))) &&
                 (item.name.contains(query, ignoreCase = true) ||
-                    item.packageName.contains(query, ignoreCase = true))
+                    item.packageName.contains(query, ignoreCase = true)) &&
+                (savedFilter == ModuleStateFilter.ALL ||
+                    (saved != null && saved[item.packageName]?.enabled ==
+                        (savedFilter == ModuleStateFilter.ENABLED)))
         }
+        if (enabledFirst && saved != null) filtered.sortedWith(
+            compareByDescending<ModuleDiscovery.Candidate> { saved[it.packageName]?.enabled == true }
+                .thenBy { it.name.lowercase() }) else filtered
     }
     Column(Modifier.fillMaxSize().padding(padding)) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp),
@@ -447,6 +484,16 @@ private fun ModuleListPage(
                 FilterChip(selected = filter == ModuleFilter.LEGACY, onClick = { filter = ModuleFilter.LEGACY },
                     label = { Text(stringResource(R.string.legacy)) })
             }
+            if (saved != null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = savedFilter == ModuleStateFilter.ALL,
+                    onClick = { savedFilter = ModuleStateFilter.ALL }, label = { Text("Any status") })
+                FilterChip(selected = savedFilter == ModuleStateFilter.ENABLED,
+                    onClick = { savedFilter = ModuleStateFilter.ENABLED }, label = { Text("Enabled") })
+                FilterChip(selected = savedFilter == ModuleStateFilter.DISABLED,
+                    onClick = { savedFilter = ModuleStateFilter.DISABLED }, label = { Text("Disabled") })
+            }
+            FilterChip(selected = enabledFirst, onClick = { enabledFirst = !enabledFirst },
+                enabled = saved != null, label = { Text("Sort: enabled first") })
         }
         LazyColumn(
             modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp),
@@ -683,7 +730,8 @@ private fun ReconcilePanel(onReconciled: (VectorReadOnly.Snapshot) -> Unit) {
 }
 
 @Composable
-private fun SettingsPage(appearance: Appearance, onAppearance: (Appearance) -> Unit, padding: PaddingValues) {
+private fun SettingsPage(appearance: Appearance, onAppearance: (Appearance) -> Unit,
+    vector: VectorState, onRefreshVector: () -> Unit, padding: PaddingValues) {
     LazyColumn(modifier = Modifier.fillMaxSize().padding(padding),
         contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { SectionHeading(stringResource(R.string.appearance)) }
@@ -705,6 +753,26 @@ private fun SettingsPage(appearance: Appearance, onAppearance: (Appearance) -> U
                                 modifier = Modifier.weight(1f))
                             if (appearance == option) Text("✓", color = MaterialTheme.colorScheme.primary)
                         }
+                    }
+                }
+            }
+        }
+        item { SectionHeading("Framework details") }
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(when (vector) {
+                        VectorState.Disconnected -> "Not connected · no root query made"
+                        VectorState.Connecting -> "Connecting…"
+                        is VectorState.Unavailable -> "Unavailable · ${vector.reason}"
+                        is VectorState.Ready -> "${vector.snapshot.frameworkVersion} / API ${vector.snapshot.apiVersion}"
+                    }, style = MaterialTheme.typography.titleMedium)
+                    if (vector is VectorState.Ready) Text(
+                        "${vector.snapshot.modules.size} configured modules · " +
+                        "${vector.snapshot.enabledCount} saved-enabled. Hook execution not verified.",
+                        style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = onRefreshVector, enabled = vector !is VectorState.Connecting) {
+                        Text(if (vector is VectorState.Ready) "Refresh framework" else "Connect to Vector")
                     }
                 }
             }

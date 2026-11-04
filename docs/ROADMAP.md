@@ -1,3 +1,5 @@
+> **2026-11-03 progress update:** S08 device write-and-restore accepted; API 36 emulator CI passed in run 41759587780. S09+S10 functional features are an implementation candidate awaiting a fresh hosted run and physical UX acceptance. Historical baseline tables below describe the project's creation, not current state. See `docs/PROJECT_STATUS.md` and `docs/S09_S10_CONSOLIDATED_FEATURES.md`.
+
 # MMRL-LSPosed — Implementation Roadmap
 
 **Version:** 1.1 · **Baseline:** 2026-11-03 · **Current state:** S04–S07 accepted; S08 implementation candidate pending hosted/device-write acceptance

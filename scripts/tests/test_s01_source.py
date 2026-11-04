@@ -20,13 +20,18 @@ class S01SourceContracts(unittest.TestCase):
         root = ET.fromstring(manifest)
         ns = "{http://schemas.android.com/apk/res/android}"
         permissions = [e.get(ns + "name") for e in root.findall("uses-permission")]
-        self.assertEqual(permissions, ["android.permission.QUERY_ALL_PACKAGES"])
+        self.assertEqual(permissions, ["android.permission.QUERY_ALL_PACKAGES",
+                                       "android.permission.INTERNET"])
         application = root.find("application")
         self.assertIsNotNone(application)
         self.assertEqual(len(application.findall("activity")), 1)
         self.assertEqual(len(application.findall("service")), 0)
         self.assertEqual(len(application.findall("receiver")), 0)
-        self.assertEqual(len(application.findall("provider")), 0)
+        providers = application.findall("provider")
+        self.assertEqual(len(providers), 1)
+        self.assertEqual(providers[0].get(ns + "exported"), "false")
+        self.assertEqual(providers[0].get(ns + "grantUriPermissions"), "true")
+        self.assertEqual(providers[0].get(ns + "name"), "androidx.core.content.FileProvider")
 
     def test_package_visibility_scope_is_documented(self):
         manifest_path = ROOT / "app/src/main/AndroidManifest.xml"
@@ -35,9 +40,9 @@ class S01SourceContracts(unittest.TestCase):
         ns = "{http://schemas.android.com/apk/res/android}"
         tools_ns = "{http://schemas.android.com/tools}"
         permissions = root.findall("uses-permission")
-        self.assertEqual(len(permissions), 1)
-        self.assertEqual(permissions[0].get(ns + "name"),
-                         "android.permission.QUERY_ALL_PACKAGES")
+        self.assertEqual(len(permissions), 2)
+        self.assertEqual([p.get(ns + "name") for p in permissions],
+                         ["android.permission.QUERY_ALL_PACKAGES", "android.permission.INTERNET"])
         self.assertEqual(permissions[0].get(tools_ns + "ignore"),
                          "QueryAllPackagesPermission")
         self.assertIn("arbitrary", source)

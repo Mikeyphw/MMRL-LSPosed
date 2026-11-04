@@ -20,24 +20,34 @@ S04–S07 as working on November 3, 2026. Record this as **maintainer-verified**
 falsely claiming an independently captured automated device-test receipt. This closes the
 read-only milestone for roadmap progression. No active hook-injection verification was claimed.
 
-## S08: guarded configuration changes — implementation candidate
+## S08: guarded configuration changes — device accepted
 
-Introduces one-by-one saved module enable/disable and scope add/remove operations with:
-- explicit confirmation, fresh pre-state and scope comparison, fixed root commands;
-- user-0 installed non-system target rules, static-scope boundaries and refusal to implicitly
-  enable a disabled module while adding scope;
-- synchronous write-ahead journal, immutable-ish bounded receipts, read-back validation,
-  and an explicit two-step reconciliation screen for unknown outcomes;
-- no automatic retry, bulk scope replacement, rollbacks, or silent background mutation.
+Hosted build, lint, JVM tests, persistent debug signing, instrumentation/hook lab artifacts,
+and attestation passed. The maintainer's physical device reported both
+`S08_DEVICE_READ_ONLY_PASS` and `S08_LAB_WRITE_AND_RESTORE_PASS` for
+run `41743515595`, `session-0007`. Host recovery journal recorded exact
+restoration of disposable module/scope state. No general hook-execution claim.
 
-**Pending:** fresh hosted `main` build/test/sign/attest, followed by positive/negative tests
-using *only disposable hook-lab module and target packages*. Verify exact restoration of
-saved module state and scopes. A successful hosted build alone does not qualify S08 device writes.
+## S09 emulator foundation — hosted accepted
+
+[GitHub run 41759587780](https://github.com/Mikeyphw/MMRL-LSPosed/actions/runs/41759587780)
+on source `2a60250e5293d864b82446afde0346a70274b96a` executed four real non-root
+Compose instrumentation tests on an Android API 36 emulator, and all signing/provenance jobs passed.
+
+## S09+S10 functional UI — implementation candidate
+
+Apps reverse lookup, module sorting and filters, framework details,
+user-driven GitHub Discover, release download verification, private saved-file history
+and CI artifact metadata are now implemented as a
+source-pinned candidate. See `docs/S09_S10_CONSOLIDATED_FEATURES.md`. Hosted Android
+compilation and physical feature acceptance **not yet performed**; do not mark these
+functions accepted before their new CI and device checks.
 
 ## Next milestones
 
-S09: Apps reverse lookup, module/app-target relationship maps and manager polish.
-S10: verified catalogs, downloads and GitHub artifact viewer.
+S09: feature UI implemented as candidate; physical scope-index comparisons pending.
+S10: GitHub metadata, verified first-party release download and artifact viewer candidate;
+no authenticated in-app CI archive downloading or APK signer qualification yet.
 S11: release hardening and independent release signing qualification.
 
 Devtool federation coordination continues separately without rewriting MMRL's main fork.

@@ -14,6 +14,7 @@ internal class VectorUiSession : ViewModel() {
     var vector by mutableStateOf<VectorState>(VectorState.Disconnected)
     var scopeOpen by mutableStateOf(false)
     var scope by mutableStateOf<ScopeState>(ScopeState.Idle)
+    var appsIndex by mutableStateOf<AppsIndexState>(AppsIndexState.Idle)
     var scopeCounts by mutableStateOf<Map<String, Int>>(emptyMap())
     var writeBusy by mutableStateOf(false)
 }

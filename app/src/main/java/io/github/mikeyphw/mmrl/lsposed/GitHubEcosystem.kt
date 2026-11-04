@@ -1,0 +1,151 @@
+package io.github.mikeyphw.mmrl.lsposed
+
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+
+/** Public, user-requested GitHub metadata only. No credentials, root or auto-install. */
+internal object GitHubEcosystem {
+    private const val REPOSITORY = "Mikeyphw/MMRL-LSPosed"
+    private const val API = "https://api.github.com"
+    private const val MAX_RESPONSE = 1_048_576
+    private const val MAX_RELEASE_FILE = 104_857_600L
+    private val repoName = Regex("[A-Za-z0-9_.-]{1,100}")
+    private val digestFormat = Regex("sha256:[a-f0-9]{64}")
+
+    data class Repository(val fullName: String, val description: String, val stars: Int)
+    data class Asset(val name: String, val size: Long, val digest: String?, val url: String) {
+        val verifiedDownloadable: Boolean get() = size in 1..MAX_RELEASE_FILE &&
+            digest != null && digestFormat.matches(digest) &&
+            (name.endsWith(".apk", true) || name.endsWith(".zip", true)) &&
+            VerifiedDownload.allowedSourceUrl(url) && VerifiedDownload.allowedName(name)
+    }
+    data class Release(val name: String, val tag: String, val htmlUrl: String, val assets: List<Asset>)
+    data class Run(val id: Long, val status: String, val headSha: String,
+                   val attempt: Int, val htmlUrl: String) {
+        val commit: String get() = headSha.take(12)
+    }
+    data class Artifact(val id: Long, val name: String, val bytes: Long,
+                        val expired: Boolean, val digest: String?, val url: String)
+
+    fun repositoryUrl(fullName: String): String? {
+        val parts = fullName.split('/')
+        if (parts.size != 2 || parts.any { !repoName.matches(it) || it == "." || it == ".." }) return null
+        return "https://github.com/${parts[0]}/${parts[1]}"
+    }
+
+    fun discovery(query: String): List<Repository> {
+        val safe = query.trim().take(60).filter { it.isLetterOrDigit() || it in " ._-" }
+        val githubQuery = "topic:xposed-module" + if (safe.isBlank()) "" else " $safe"
+        val url = "$API/search/repositories?q=" + URLEncoder.encode(githubQuery, "UTF-8") +
+            "&sort=updated&order=desc&per_page=20"
+        val items = requestObject(url).optJSONArray("items") ?: JSONArray()
+        return (0 until minOf(items.length(), 20)).mapNotNull { i ->
+            val item = items.optJSONObject(i) ?: return@mapNotNull null
+            val name = item.optString("full_name")
+            if (repositoryUrl(name) == null) return@mapNotNull null
+            Repository(name, item.optString("description").take(220), item.optInt("stargazers_count"))
+        }
+    }
+
+    fun releases(): List<Release> {
+        val items = requestArray("$API/repos/$REPOSITORY/releases?per_page=15")
+        return (0 until minOf(items.length(), 15)).mapNotNull { i ->
+            val release = items.optJSONObject(i) ?: return@mapNotNull null
+            if (release.optBoolean("draft") || release.optBoolean("prerelease")) return@mapNotNull null
+            val link = release.optString("html_url")
+            if (!link.startsWith("https://github.com/$REPOSITORY/releases/")) return@mapNotNull null
+            val assets = release.optJSONArray("assets") ?: JSONArray()
+            Release(release.optString("name").take(100), release.optString("tag_name").take(80),
+                link, (0 until minOf(assets.length(), 30)).mapNotNull { j ->
+                    val a = assets.optJSONObject(j) ?: return@mapNotNull null
+                    val file = a.optString("name").take(150)
+                    val size = a.optLong("size", -1)
+                    val rawDigest = a.optString("digest").takeIf { digestFormat.matches(it) }
+                    val url = a.optString("browser_download_url")
+                    if (file.isBlank() || size !in 1..MAX_RELEASE_FILE ||
+                        !VerifiedDownload.allowedSourceUrl(url)) return@mapNotNull null
+                    Asset(file, size, rawDigest, url)
+                })
+        }
+    }
+
+    fun recentRuns(): List<Run> {
+        val items = requestObject("$API/repos/$REPOSITORY/actions/runs?per_page=15")
+            .optJSONArray("workflow_runs") ?: JSONArray()
+        return (0 until minOf(items.length(), 15)).mapNotNull { i ->
+            val obj = items.optJSONObject(i) ?: return@mapNotNull null
+            val id = obj.optLong("id", 0)
+            val url = "https://github.com/$REPOSITORY/actions/runs/$id"
+            if (id <= 0 || obj.optString("html_url") != url) return@mapNotNull null
+            val source = obj.optString("head_sha")
+            val attempt = obj.optInt("run_attempt", 0)
+            if (!Regex("[a-f0-9]{40}").matches(source) || attempt < 1) return@mapNotNull null
+            val conclusion = obj.optString("conclusion")
+                .takeUnless { it.isBlank() || it == "null" }
+            Run(id, (conclusion ?: obj.optString("status")).take(30),
+                source, attempt, url)
+        }
+    }
+
+    /** Public CI metadata, never binary download or signer qualification. */
+    fun runArtifacts(run: Run): List<Artifact> {
+        require(run.id > 0 && run.attempt > 0 && Regex("[a-f0-9]{40}").matches(run.headSha))
+        val items = requestObject("$API/repos/$REPOSITORY/actions/runs/${run.id}/artifacts?per_page=50")
+            .optJSONArray("artifacts") ?: JSONArray()
+        return decodeRunArtifacts(run, items)
+    }
+
+    /** Pure validation of artifact ownership; API does not pin archives to a run attempt. */
+    fun decodeRunArtifacts(run: Run, items: JSONArray): List<Artifact> {
+        require(run.id > 0 && run.attempt > 0 && Regex("[a-f0-9]{40}").matches(run.headSha))
+        return (0 until minOf(items.length(), 50)).mapNotNull { i ->
+            val obj = items.optJSONObject(i) ?: return@mapNotNull null
+            val id = obj.optLong("id", 0)
+            val runRef = obj.optJSONObject("workflow_run") ?: return@mapNotNull null
+            if (id <= 0 || runRef.optLong("id") != run.id ||
+                runRef.optString("head_sha") != run.headSha) return@mapNotNull null
+            val name = obj.optString("name").take(120)
+            val size = obj.optLong("size_in_bytes", -1)
+            if (name.isBlank() || size < 0) return@mapNotNull null
+            val digest = obj.optString("digest").takeIf { digestFormat.matches(it) }
+            Artifact(id, name, size, obj.optBoolean("expired"), digest,
+                "https://github.com/$REPOSITORY/actions/runs/${run.id}/artifacts/$id")
+        }
+    }
+
+    private fun requestObject(path: String): JSONObject = JSONObject(request(path))
+    private fun requestArray(path: String): JSONArray = JSONArray(request(path))
+
+    private fun request(path: String): String {
+        val url = URL(path)
+        if (url.protocol != "https" || url.host != "api.github.com")
+            throw IOException("Only the public GitHub API is allowed")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            connectTimeout = 7_000
+            readTimeout = 10_000
+            instanceFollowRedirects = false
+            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("User-Agent", "MMRL-LSPosed/0.1")
+        }
+        try {
+            if (connection.responseCode != 200) throw IOException(
+                "GitHub returned HTTP ${connection.responseCode}; retry later or check rate limits")
+            connection.inputStream.use { stream ->
+                val buffer = ByteArray(8192)
+                val data = ByteArrayOutputStream()
+                while (true) {
+                    val size = stream.read(buffer)
+                    if (size < 0) break
+                    if (data.size() + size > MAX_RESPONSE) throw IOException("GitHub response too large")
+                    data.write(buffer, 0, size)
+                }
+                return data.toString("UTF-8")
+            }
+        } finally { connection.disconnect() }
+    }
+}
