@@ -1,5 +1,6 @@
 package io.github.mikeyphw.mmrl.lsposed
 
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
