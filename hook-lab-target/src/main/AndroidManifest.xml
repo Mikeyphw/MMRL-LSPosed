@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application android:label="LSPosed S08 Hook Lab Target" android:allowBackup="false">
+    <provider android:name=".ProbeProvider" android:authorities="com.mikeyphw.lsposed.hooklab.target"
+      android:exported="true" />
+  </application>
+</manifest>

@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "MMRL-LSPosed"
 include(":app")
+include(":hook-lab-module", ":hook-lab-target")

@@ -91,7 +91,13 @@ class ReadOnlyVectorContracts(unittest.TestCase):
         self.assertIn('scripts/hosted_debug_signing.py', flow)
         self.assertIn('actions/attest@', flow)
         self.assertLess(flow.index('--node test'), flow.index('scripts/hosted_debug_signing.py'))
-        self.assertNotRegex(flow, r'(?m)^\s+(?:gradle|\./gradlew)\s')
+        # Devtool owns APK, lint and JVM tasks. Its reviewed provider does not
+        # support :app:assembleDebugAndroidTest, so allow exactly one hosted
+        # standalone instrumentation/lab build group and reject any other direct Gradle.
+        direct = re.findall(r'(?m)^\s+(?:gradle|\./gradlew)\s.*$', flow)
+        self.assertEqual([x.strip() for x in direct], [
+            './gradlew --no-daemon :app:assembleDebugAndroidTest :hook-lab-module:assembleDebug :hook-lab-target:assembleDebug'
+        ])
         devtool = (ROOT / '.devtool.toml').read_text()
         self.assertIn('[targets.lsposed_app.jobs.unit_debug]', devtool)
         self.assertIn('gradle_tasks = [":app:testDebugUnitTest"]', devtool)

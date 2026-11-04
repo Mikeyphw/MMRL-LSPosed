@@ -62,7 +62,13 @@ class S01SourceContracts(unittest.TestCase):
         flow = (ROOT / ".github/workflows/s01-hosted-devtool.yml").read_text()
         self.assertIn('scripts/hosted_devtool.py run --node apk', flow)
         self.assertIn('scripts/hosted_devtool.py run --node lint', flow)
-        self.assertNotRegex(flow, r'(?m)^\s+(?:gradle|\./gradlew)\s')
+        # Devtool owns APK, lint and JVM tasks. Its reviewed provider does not
+        # support :app:assembleDebugAndroidTest, so allow exactly one hosted
+        # standalone instrumentation/lab build group and reject any other direct Gradle.
+        direct = re.findall(r'(?m)^\s+(?:gradle|\./gradlew)\s.*$', flow)
+        self.assertEqual([x.strip() for x in direct], [
+            './gradlew --no-daemon :app:assembleDebugAndroidTest :hook-lab-module:assembleDebug :hook-lab-target:assembleDebug'
+        ])
         config = (ROOT / ".devtool.toml").read_text()
         self.assertIn('[targets.lsposed_app.workflows]', config)
         self.assertIn('ci_android_wrapper_jar_sha256 = "d3b261c2820e9e3d8d639ed084900f11f4a86050a8f83342ade7b6bc9b0d2bdd"', config)
