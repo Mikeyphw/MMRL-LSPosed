@@ -39,6 +39,18 @@ class EmulatorGateContracts(unittest.TestCase):
             self.assertNotIn(s,src)
         self.assertEqual(ci.CLASS,'io.github.mikeyphw.mmrl.lsposed.S09EmulatorUiTest')
 
+    def test_compose_semantics_node_assertions_are_members_not_imports(self):
+        # CI 41758649327: assertExists/assertDoesNotExist are member methods of
+        # SemanticsNodeInteraction; they are not importable top-level extensions.
+        src=(ROOT/'app/src/androidTest/java/io/github/mikeyphw/mmrl/lsposed/S09EmulatorUiTest.kt').read_text()
+        for symbol in ('assertExists', 'assertDoesNotExist'):
+            with self.subTest(symbol=symbol):
+                self.assertNotIn(f'import androidx.compose.ui.test.{symbol}',src)
+                self.assertIn(f'.{symbol}()',src)
+        # assertTextContains is a real Compose UI test extension and must stay imported.
+        self.assertIn('import androidx.compose.ui.test.assertTextContains',src)
+        self.assertIn('.assertTextContains("ci-test-absent-module")',src)
+
     def test_ui_test_has_stable_navigation_tags(self):
         src=(ROOT/'app/src/main/java/io/github/mikeyphw/mmrl/lsposed/MainActivity.kt').read_text()
         self.assertIn('Modifier.testTag("nav_${destination.name.lowercase()}")',src)
