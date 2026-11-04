@@ -40,25 +40,35 @@ class FeaturesContracts(unittest.TestCase):
         self.assertIn('Framework details', main)
         self.assertIn('Hook execution not verified', main)
 
-    def test_network_is_user_initiated_and_github_only(self):
+    def test_official_catalog_and_user_initiated_github_calls(self):
         pages = self.read('EcosystemPages.kt')
         self.assertIn('"discover_search"', pages)
         self.assertIn('"downloads_load"', pages)
         self.assertIn('"downloads_saved"', pages)
         self.assertIn('onClick = {', pages)
-        self.assertNotIn('LaunchedEffect(', pages)
+        self.assertIn('LaunchedEffect(Unit) {', pages)
+        self.assertIn('VectorModuleCatalog.cached(context.applicationContext)', pages)
+        self.assertIn('if (savedCatalog != null) catalog = savedCatalog', pages)
+        self.assertIn('VectorModuleCatalog.load(context.applicationContext)', pages)
+        self.assertIn('"Search LSPosed modules"', pages)
+        catalog = self.read('VectorModuleCatalog.kt')
+        self.assertIn('https://backup.modules.lsposed.org/modules.json', catalog)
+        self.assertNotIn('Authorization', catalog)
+        self.assertIn('parse(cache.readText())', catalog)
         api = self.read('GitHubEcosystem.kt')
         for s in ('"api.github.com"', 'connectTimeout = 7_000',
                   'readTimeout = 10_000', 'MAX_RESPONSE = 1_048_576',
-                  'topic:xposed-module', 'fun recentRuns()',
-                  'fun releases()', 'fun discovery(', 'fun runArtifacts('):
+                  'topic:xposed-module', 'fun recentRuns(context: Context)',
+                  'fun releases(context: Context)', 'fun discovery(', 'fun runArtifacts('):
             self.assertIn(s, api)
         self.assertIn('runRef.optString("head_sha") != run.headSha', api)
         self.assertIn('runRef.optLong("id") != run.id', api)
         self.assertIn('decodeRunArtifacts(run, items)', api)
         self.assertIn('it.isBlank() || it == "null"', api)
         self.assertIn('"expired"', api)
-        self.assertNotIn('Authorization', api)
+        self.assertIn('setRequestProperty("Authorization", "Bearer $token")', api)
+        self.assertIn('url.host != "api.github.com"', api)
+        self.assertIn('instanceFollowRedirects = false', api)
         self.assertNotIn('VectorRootTransport', api)
 
     def test_download_fail_closed_digest_and_path(self):
@@ -104,8 +114,8 @@ class FeaturesContracts(unittest.TestCase):
         ui = self.read('EcosystemPages.kt')
         self.assertIn('val requestedTab = tab', ui)
         self.assertIn('if (requestedTab == 0)', ui)
-        self.assertIn('GitHubEcosystem.releases()', ui)
-        self.assertIn('GitHubEcosystem.recentRuns()', ui)
+        self.assertIn('GitHubEcosystem.releases(context.applicationContext)', ui)
+        self.assertIn('GitHubEcosystem.recentRuns(context.applicationContext)', ui)
         self.assertNotIn(' as List<GitHubEcosystem.', ui)
         self.assertIn('val cancelSignal = remember { AtomicBoolean(false) }', ui)
         self.assertIn('DisposableEffect(Unit) { onDispose { cancelSignal.set(true) } }', ui)

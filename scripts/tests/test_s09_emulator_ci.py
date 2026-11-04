@@ -31,6 +31,7 @@ class EmulatorGateContracts(unittest.TestCase):
         self.assertEqual(src.count('@Test fun '),4)
         self.assertIn('VectorUiSession::class.java',src)
         self.assertIn('Root connection must be explicit',src)
+        self.assertIn('LocalSettings.isEmulator()', (ROOT/'app/src/main/java/io/github/mikeyphw/mmrl/lsposed/MainActivity.kt').read_text())
         self.assertIn('createAndroidComposeRule<MainActivity>()',src)
         self.assertIn('performTextInput("ci-test-absent-module")',src)
         for s in ('VectorMutation.change(', 'VectorReadOnly.inspect(',

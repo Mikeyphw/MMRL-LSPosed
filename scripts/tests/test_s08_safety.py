@@ -62,15 +62,21 @@ class S08Safety(unittest.TestCase):
         self.assertNotIn('revert', mutation.lower())
         self.assertNotIn('fun rollback(', mutation)
 
-    def test_scope_button_is_one_at_a_time_with_explicit_confirmation(self):
+    def test_scope_checkbox_executes_single_verified_change_without_draft(self):
         page = self.read('ScopeDraftPage.kt')
-        self.assertIn('Confirm single change', page)
         self.assertIn('VectorMutation.change(', page)
-        self.assertIn('Remaining draft', page)
-        self.assertIn('TargetTab.SELECTED', page)
-        self.assertIn('TargetTab.SUGGESTED', page)
+        self.assertIn('VectorMutation.Action.ADD_SCOPE', page)
+        self.assertIn('VectorMutation.Action.REMOVE_SCOPE', page)
+        self.assertIn('VectorMutation.Action.ENABLE', page)
         self.assertIn('enabled == false', page)
+        self.assertIn('onWriteBusy(true)', page)
+        self.assertIn('onWriteBusy(false)', page)
+        self.assertIn('onCommitted(it)', page)
+        self.assertIn('scope_enable_module', page)
+        self.assertNotIn('Review draft', page)
+        self.assertNotIn('Confirm single change', page)
         self.assertNotIn('scope set', page)
+        self.assertNotIn('VectorRootTransport.mutate(', page)
 
     def test_hosted_ci_signing_and_source_pins_remain_unchanged(self):
         flow = (ROOT / '.github/workflows/s01-hosted-devtool.yml').read_text()

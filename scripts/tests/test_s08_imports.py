@@ -20,8 +20,7 @@ class S08ComposeImports(unittest.TestCase):
                 'rememberCoroutineScope': 'androidx.compose.runtime.rememberCoroutineScope',
             },
             'ScopeDraftPage.kt': {
-                'AlertDialog': 'androidx.compose.material3.AlertDialog',
-                'TextButton': 'androidx.compose.material3.TextButton',
+                # No review dialog remains: a tap invokes S08's verified write API directly.
                 'rememberCoroutineScope': 'androidx.compose.runtime.rememberCoroutineScope',
             },
         }

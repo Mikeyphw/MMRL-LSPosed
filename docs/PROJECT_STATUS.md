@@ -1,3 +1,12 @@
+> **2026-11-04:** S09+S10 hosted build, JVM, API 36 emulator, signing and provenance
+> passed in [run 41770774354](https://github.com/Mikeyphw/MMRL-LSPosed/actions/runs/41770774354)
+> at source `15ed223b6f1e9bd3d07ce74a2ecedcef1eef99e9`.
+> Physical UI screenshots exposed scope-review and generic GitHub search usability issues.
+> An S11 candidate replaces drafts with direct per-app verified writes, adds one-shot
+> read-only Vector auto-connect, uses the actual Vector LSPosed catalog and provides
+> encrypted optional GitHub API token settings. See
+> `docs/S11_DIRECT_SCOPES_VECTOR_CATALOG_AUTH.md`. Hosted/physical S11 qualification pending.
+
 # MMRL-LSPosed — implementation and acceptance status
 
 Updated November 3, 2026. Source of truth for milestone progress; the separate roadmap includes historical baseline notes.

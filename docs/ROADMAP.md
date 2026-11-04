@@ -1,3 +1,11 @@
+> **2026-11-04 S11 UX policy update:** The historical S07/S08 draft/confirmation steps
+> below were intentional at the earlier alpha stage, but the current S11 candidate
+> replaces them with immediate, individually verified scope checkbox actions.
+> A disabled module requires its own explicit Enable action. The user also requested
+> one-shot read-only auto-connect by default on physical devices (opt-out in Settings).
+> This does not grant automatic writes. Details and acceptance limits:
+> `docs/S11_DIRECT_SCOPES_VECTOR_CATALOG_AUTH.md`.
+
 > **2026-11-03 progress update:** S08 device write-and-restore accepted; API 36 emulator CI passed in run 41759587780. S09+S10 functional features are an implementation candidate awaiting a fresh hosted run and physical UX acceptance. Historical baseline tables below describe the project's creation, not current state. See `docs/PROJECT_STATUS.md` and `docs/S09_S10_CONSOLIDATED_FEATURES.md`.
 
 # MMRL-LSPosed — Implementation Roadmap

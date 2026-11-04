@@ -22,6 +22,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
@@ -53,60 +54,92 @@ internal fun DiscoverPage(padding: PaddingValues) {
     val coroutine = rememberCoroutineScope()
     var term by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
-    var loaded by remember { mutableStateOf(false) }
-    var rows by androidx.compose.runtime.remember { mutableStateOf(emptyList<GitHubEcosystem.Repository>()) }
-    var message by rememberSaveable { mutableStateOf("") }
+    var catalog by remember { mutableStateOf<VectorModuleCatalog.Result?>(null) }
+    var message by remember { mutableStateOf("") }
+
+    fun load() {
+        if (busy) return
+        busy = true
+        message = ""
+        coroutine.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { VectorModuleCatalog.load(context.applicationContext) }
+            }
+            result.onSuccess { catalog = it }.onFailure {
+                message = "LSPosed catalog unavailable. Check your connection or Private DNS and retry."
+            }
+            busy = false
+        }
+    }
+    LaunchedEffect(Unit) {
+        // Render previously verified local metadata without waiting for DNS timeout.
+        val savedCatalog = withContext(Dispatchers.IO) {
+            VectorModuleCatalog.cached(context.applicationContext)
+        }
+        if (savedCatalog != null) catalog = savedCatalog
+        load()
+    }
+    val results = VectorModuleCatalog.filter(catalog?.modules.orEmpty(), term)
     LazyColumn(Modifier.fillMaxSize().padding(padding),
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Text("Discover modules", style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold)
-            Text("Public GitHub topic search. Results are unreviewed third-party repositories; " +
-                "a listing is not an endorsement or proof of compatibility.",
+            Text("Official LSPosed module repository used by Vector. " +
+                "Catalog entries are community-published; review publisher and compatibility before installing.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         item {
-            OutlinedTextField(value = term, onValueChange = { term = it.take(60) },
-                label = { Text("Search Xposed repositories") },
+            OutlinedTextField(value = term, onValueChange = { term = it.take(80) },
+                label = { Text("Search LSPosed modules") },
                 singleLine = true, modifier = Modifier.fillMaxWidth().testTag("discover_query"))
         }
         item {
-            Button(onClick = {
-                busy = true; loaded = false; message = ""
-                coroutine.launch {
-                    withContext(Dispatchers.IO) { runCatching { GitHubEcosystem.discovery(term) } }
-                        .onSuccess { rows = it; loaded = true }
-                        .onFailure { message = it.message?.take(180) ?: "GitHub lookup unavailable" }
-                    busy = false
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(onClick = { load() }, enabled = !busy,
+                    modifier = Modifier.testTag("discover_search")) {
+                    Text(if (busy) "Loading…" else "Refresh catalog")
                 }
-            }, enabled = !busy, modifier = Modifier.testTag("discover_search")) {
-                Text(if (busy) "Searching…" else "Search GitHub")
+                if (catalog != null) Text("${results.size} / ${catalog!!.modules.size} modules",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 12.dp))
             }
         }
-        if (message.isNotBlank()) item { Text(message, color = MaterialTheme.colorScheme.error) }
-        if (!loaded && !busy && message.isBlank()) item {
-            Text("Search only when you choose. No third-party catalog is trusted automatically.")
+        val active = catalog
+        if (active != null && active.cached) item {
+            Text(active.warning, color = MaterialTheme.colorScheme.tertiary)
         }
-        if (loaded && rows.isEmpty()) item { Text("No repositories matched this search") }
-        items(rows, key = { it.fullName }) { repo ->
+        if (message.isNotBlank()) item { Text(message, color = MaterialTheme.colorScheme.error) }
+        if (busy && active == null) item { Text("Loading LSPosed catalog…") }
+        if (!busy && active != null && results.isEmpty()) item { Text("No modules match your search") }
+        items(results.take(250), key = { it.packageName }) { repo ->
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(repo.fullName, style = MaterialTheme.typography.titleMedium)
-                    if (repo.description.isNotBlank()) Text(repo.description,
+                    Text(repo.title, style = MaterialTheme.typography.titleMedium)
+                    Text(repo.packageName, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (repo.summary.isNotBlank()) Text(repo.summary,
                         style = MaterialTheme.typography.bodySmall)
-                    Text("${repo.stars} stars · Unreviewed source",
+                    Text("${repo.stars} stars" + if (repo.version.isNotBlank()) " · ${repo.version}" else "",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall)
                     OutlinedButton(onClick = {
-                        GitHubEcosystem.repositoryUrl(repo.fullName)?.let { link ->
-                            runCatching { openGitHub(context, link) }
-                                .onFailure { message = "No browser available for GitHub" }
+                        val uri = Uri.parse(repo.pageUrl)
+                        if (uri.scheme == "https" && uri.host == "modules.lsposed.org" &&
+                            uri.userInfo == null && uri.port == -1) {
+                            runCatching {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, uri)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }.onFailure { message = "No browser available to open module details" }
                         }
-                    }) { Text("Inspect on GitHub") }
+                    }) { Text("View module details") }
                 }
             }
-
+        }
+        if (results.size > 250) item {
+            Text("Showing the first 250 matches. Refine your search to see more.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -158,12 +191,12 @@ internal fun DownloadsPage(padding: PaddingValues) {
                 if (requestedTab == 1) { selectedRun = null; artifacts = null }
                 coroutine.launch {
                     if (requestedTab == 0) {
-                        val result = withContext(Dispatchers.IO) { runCatching { GitHubEcosystem.releases() } }
+                        val result = withContext(Dispatchers.IO) { runCatching { GitHubEcosystem.releases(context.applicationContext) } }
                         result.onSuccess { releases = it }.onFailure {
                             if (tab == requestedTab) message = it.message?.take(180) ?: "GitHub unavailable"
                         }
                     } else {
-                        val result = withContext(Dispatchers.IO) { runCatching { GitHubEcosystem.recentRuns() } }
+                        val result = withContext(Dispatchers.IO) { runCatching { GitHubEcosystem.recentRuns(context.applicationContext) } }
                         result.onSuccess { runs = it }.onFailure {
                             if (tab == requestedTab) message = it.message?.take(180) ?: "GitHub unavailable"
                         }
@@ -297,7 +330,7 @@ internal fun DownloadsPage(padding: PaddingValues) {
                                 selectedRun = run; artifacts = null; busy = true; message = ""
                                 coroutine.launch {
                                     withContext(Dispatchers.IO) { runCatching {
-                                        GitHubEcosystem.runArtifacts(run)
+                                        GitHubEcosystem.runArtifacts(run, context.applicationContext)
                                     } }.onSuccess { artifacts = it }.onFailure {
                                         message = it.message?.take(180) ?: "Artifact lookup unavailable"
                                     }

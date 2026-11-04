@@ -70,6 +70,9 @@ class S09EmulatorUiTest {
         compose.onNodeWithTag("open_settings").performClick()
         compose.onNodeWithText("Appearance").assertExists()
         compose.onNodeWithText("AMOLED").assertExists()
+        compose.onNodeWithTag("auto_vector_connect").assertExists()
+        compose.onNodeWithTag("github_token_input").assertExists()
+        compose.onNodeWithTag("github_token_check").assertExists()
         compose.onNodeWithTag("nav_modules").assertDoesNotExist()
         assertNoImplicitVectorConnection()
     }

@@ -44,6 +44,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
@@ -63,6 +64,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -75,7 +77,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Independent manager: unprivileged APK browsing; Vector reads only after Connect. */
+/** Independent manager: opt-out read-only Vector auto-connect on physical Android. */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -146,6 +148,14 @@ private fun StandaloneApp() {
         var refreshKey by remember { mutableIntStateOf(0) }
         var vectorRefresh by remember { mutableIntStateOf(0) }
         var vector by session::vector
+        var autoConnect by remember { mutableStateOf(LocalSettings.autoConnect(context.applicationContext)) }
+        LaunchedEffect(session) {
+            if (!session.autoConnectAttempted) {
+                session.autoConnectAttempted = true
+                if (autoConnect && !LocalSettings.isEmulator() &&
+                    vector is VectorState.Disconnected) vectorRefresh++
+            }
+        }
         var appsIndex by session::appsIndex
         var appsRequest by remember { mutableIntStateOf(0) }
         var scopeOpen by session::scopeOpen
@@ -228,7 +238,13 @@ private fun StandaloneApp() {
         ) { innerPadding ->
             when {
                 settings -> SettingsPage(appearance, onAppearance = { appearance = it },
-                    vector = vector, onRefreshVector = { vectorRefresh++ }, padding = innerPadding)
+                    vector = vector, onRefreshVector = { vectorRefresh++ },
+                    autoConnect = autoConnect, onAutoConnect = { selected ->
+                        LocalSettings.setAutoConnect(context.applicationContext, selected)
+                        autoConnect = selected
+                        if (selected && !LocalSettings.isEmulator() &&
+                            vector !is VectorState.Ready && vector !is VectorState.Connecting) vectorRefresh++
+                    }, padding = innerPadding)
                 scopeOpen && selectedModule != null -> {
                     val currentModule = selectedModule!!
                     ScopeDraftPage(currentModule, scope, innerPadding,
@@ -388,7 +404,7 @@ private fun HomePage(
                             is VectorState.Unavailable -> "Connection unavailable"
                         }, style = MaterialTheme.typography.titleMedium)
                         Text(when (vector) {
-                            VectorState.Disconnected -> "Connect explicitly to inspect saved module configuration."
+                            VectorState.Disconnected -> "Connect or enable automatic connection in Settings."
                             VectorState.Connecting -> "Requesting read-only framework access…"
                             is VectorState.Ready -> "${vector.snapshot.enabledCount} enabled / " +
                                 "${vector.snapshot.modules.size} configured modules. Hooks not verified."
@@ -731,7 +747,16 @@ private fun ReconcilePanel(onReconciled: (VectorReadOnly.Snapshot) -> Unit) {
 
 @Composable
 private fun SettingsPage(appearance: Appearance, onAppearance: (Appearance) -> Unit,
-    vector: VectorState, onRefreshVector: () -> Unit, padding: PaddingValues) {
+    vector: VectorState, onRefreshVector: () -> Unit,
+    autoConnect: Boolean, onAutoConnect: (Boolean) -> Unit, padding: PaddingValues) {
+    val context = LocalContext.current
+    val coroutine = rememberCoroutineScope()
+    var tokenDraft by remember { mutableStateOf("") }
+    var tokenStored by remember { mutableStateOf(LocalSettings.hasGitHubToken(context)) }
+    var tokenStatus by remember { mutableStateOf("") }
+    var testingToken by remember { mutableStateOf(false) }
+    var updatingToken by remember { mutableStateOf(false) }
+
     LazyColumn(modifier = Modifier.fillMaxSize().padding(padding),
         contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { SectionHeading(stringResource(R.string.appearance)) }
@@ -757,6 +782,24 @@ private fun SettingsPage(appearance: Appearance, onAppearance: (Appearance) -> U
                 }
             }
         }
+        item { SectionHeading("Vector connection") }
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+                Row(Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Connect to Vector automatically", style = MaterialTheme.typography.titleMedium)
+                        Text("Read-only on app launch. No background polling, scope writes, " +
+                            "or automatic retries after errors.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(checked = autoConnect, onCheckedChange = onAutoConnect,
+                        modifier = Modifier.testTag("auto_vector_connect"))
+                }
+            }
+        }
         item { SectionHeading("Framework details") }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
@@ -774,6 +817,72 @@ private fun SettingsPage(appearance: Appearance, onAppearance: (Appearance) -> U
                     OutlinedButton(onClick = onRefreshVector, enabled = vector !is VectorState.Connecting) {
                         Text(if (vector is VectorState.Ready) "Refresh framework" else "Connect to Vector")
                     }
+                }
+            }
+        }
+        item { SectionHeading("GitHub API authentication") }
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(if (tokenStored) "Personal access token saved" else "No GitHub token saved",
+                        style = MaterialTheme.typography.titleMedium)
+                    Text("Optional. Fine-grained read-only access is sufficient for public metadata. " +
+                        "The token is encrypted with Android Keystore, excluded from backups, " +
+                        "and sent only to api.github.com. It is not used for the LSPosed catalog.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedTextField(value = tokenDraft, onValueChange = { tokenDraft = it.take(512) },
+                        label = { Text("GitHub personal access token") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true, modifier = Modifier.fillMaxWidth().testTag("github_token_input"))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = {
+                            val submitted = tokenDraft
+                            tokenDraft = ""
+                            updatingToken = true
+                            coroutine.launch {
+                                val success = withContext(Dispatchers.IO) {
+                                    runCatching { LocalSettings.saveGitHubToken(context.applicationContext, submitted) }
+                                        .isSuccess
+                                }
+                                if (success) tokenStored = true
+                                tokenStatus = if (success) "Token saved securely" else
+                                    "Could not save token; check its format and device Keystore"
+                                updatingToken = false
+                            }
+                        }, enabled = tokenDraft.isNotBlank() && !updatingToken && !testingToken) {
+                            Text("Save token")
+                        }
+                        OutlinedButton(onClick = {
+                            updatingToken = true
+                            coroutine.launch {
+                                val success = withContext(Dispatchers.IO) {
+                                    runCatching { LocalSettings.clearGitHubToken(context.applicationContext) }
+                                        .isSuccess
+                                }
+                                if (success) { tokenStored = false; tokenDraft = "" }
+                                tokenStatus = if (success) "Token removed from settings" else
+                                    "Could not remove token"
+                                updatingToken = false
+                            }
+                        }, enabled = tokenStored && !updatingToken && !testingToken) { Text("Remove") }
+                    }
+                    OutlinedButton(onClick = {
+                        testingToken = true
+                        tokenStatus = "Checking GitHub API…"
+                        coroutine.launch {
+                            tokenStatus = withContext(Dispatchers.IO) {
+                                runCatching { GitHubEcosystem.rateLimit(context.applicationContext) }
+                                    .getOrElse { GitHubEcosystem.connectionDiagnostic(it) }
+                            }
+                            testingToken = false
+                        }
+                    }, enabled = !testingToken && !updatingToken, modifier = Modifier.testTag("github_token_check")) {
+                        Text(if (testingToken) "Checking…" else "Check GitHub connection")
+                    }
+                    if (tokenStatus.isNotBlank()) Text(tokenStatus,
+                        style = MaterialTheme.typography.bodySmall)
                 }
             }
         }

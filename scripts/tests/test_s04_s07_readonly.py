@@ -68,20 +68,19 @@ class ReadOnlyVectorContracts(unittest.TestCase):
                       'MAX_METADATA_BYTES', 'getInstalledApplications'):
             self.assertIn(entry, scanner)
 
-    def test_scope_draft_review_is_explicit_and_single_apply(self):
+    def test_scope_direct_change_preserves_single_write_and_saved_read_back(self):
         editor = (SRC / 'ScopeDraftPage.kt').read_text()
-        for item in ('TargetTab.SUGGESTED', 'TargetTab.SELECTED', 'AlertDialog(',
-                     'Review draft', 'Discard changes', 'rememberSaveable',
-                     'Checkbox(', 'managerPackages', 'staticScope', 'Other Android user'):
+        for item in ('TargetTab.SUGGESTED', 'TargetTab.SELECTED', 'rememberSaveable',
+                     'Checkbox(', 'managerPackages', 'staticScope', 'Other Android user',
+                     'scope_enable_module', 'VectorMutation.change(', 'onCommitted(it)'):
             self.assertIn(item, editor)
-        for denied in ('submitChanges', 'writeScope', 'RootService', 'VectorRootTransport'):
+        for denied in ('submitChanges', 'writeScope', 'RootService', 'VectorRootTransport',
+                       'Review draft', 'Confirm single change', 'showReview'):
             self.assertNotIn(denied, editor)
         activity = (SRC / 'MainActivity.kt').read_text()
         self.assertIn('if (vectorRefresh == 0) return@LaunchedEffect', activity)
         self.assertIn('onConnect = { vectorRefresh++ }', activity)
         self.assertIn('if (scopeOpen && selectedModule?.packageName == pkg)', activity)
-        self.assertIn('VectorMutation.change(', editor)
-        self.assertIn('Confirm single change', editor)
 
     def test_ci_keeps_signing_and_adds_real_jvm_tests(self):
         flow = (ROOT / '.github/workflows/s01-hosted-devtool.yml').read_text()

@@ -1,5 +1,6 @@
 package io.github.mikeyphw.mmrl.lsposed
 
+import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -7,6 +8,8 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 
 /** Public, user-requested GitHub metadata only. No credentials, root or auto-install. */
 internal object GitHubEcosystem {
@@ -38,12 +41,12 @@ internal object GitHubEcosystem {
         return "https://github.com/${parts[0]}/${parts[1]}"
     }
 
-    fun discovery(query: String): List<Repository> {
+    fun discovery(query: String, context: Context): List<Repository> {
         val safe = query.trim().take(60).filter { it.isLetterOrDigit() || it in " ._-" }
         val githubQuery = "topic:xposed-module" + if (safe.isBlank()) "" else " $safe"
         val url = "$API/search/repositories?q=" + URLEncoder.encode(githubQuery, "UTF-8") +
             "&sort=updated&order=desc&per_page=20"
-        val items = requestObject(url).optJSONArray("items") ?: JSONArray()
+        val items = requestObject(url, context).optJSONArray("items") ?: JSONArray()
         return (0 until minOf(items.length(), 20)).mapNotNull { i ->
             val item = items.optJSONObject(i) ?: return@mapNotNull null
             val name = item.optString("full_name")
@@ -52,8 +55,8 @@ internal object GitHubEcosystem {
         }
     }
 
-    fun releases(): List<Release> {
-        val items = requestArray("$API/repos/$REPOSITORY/releases?per_page=15")
+    fun releases(context: Context): List<Release> {
+        val items = requestArray("$API/repos/$REPOSITORY/releases?per_page=15", context)
         return (0 until minOf(items.length(), 15)).mapNotNull { i ->
             val release = items.optJSONObject(i) ?: return@mapNotNull null
             if (release.optBoolean("draft") || release.optBoolean("prerelease")) return@mapNotNull null
@@ -74,8 +77,8 @@ internal object GitHubEcosystem {
         }
     }
 
-    fun recentRuns(): List<Run> {
-        val items = requestObject("$API/repos/$REPOSITORY/actions/runs?per_page=15")
+    fun recentRuns(context: Context): List<Run> {
+        val items = requestObject("$API/repos/$REPOSITORY/actions/runs?per_page=15", context)
             .optJSONArray("workflow_runs") ?: JSONArray()
         return (0 until minOf(items.length(), 15)).mapNotNull { i ->
             val obj = items.optJSONObject(i) ?: return@mapNotNull null
@@ -93,9 +96,9 @@ internal object GitHubEcosystem {
     }
 
     /** Public CI metadata, never binary download or signer qualification. */
-    fun runArtifacts(run: Run): List<Artifact> {
+    fun runArtifacts(run: Run, context: Context): List<Artifact> {
         require(run.id > 0 && run.attempt > 0 && Regex("[a-f0-9]{40}").matches(run.headSha))
-        val items = requestObject("$API/repos/$REPOSITORY/actions/runs/${run.id}/artifacts?per_page=50")
+        val items = requestObject("$API/repos/$REPOSITORY/actions/runs/${run.id}/artifacts?per_page=50", context)
             .optJSONArray("artifacts") ?: JSONArray()
         return decodeRunArtifacts(run, items)
     }
@@ -118,10 +121,23 @@ internal object GitHubEcosystem {
         }
     }
 
-    private fun requestObject(path: String): JSONObject = JSONObject(request(path))
-    private fun requestArray(path: String): JSONArray = JSONArray(request(path))
+    fun rateLimit(context: Context): String {
+        val limits = requestObject("$API/rate_limit", context)
+        val core = limits.optJSONObject("resources")?.optJSONObject("core")
+        return "GitHub API available · ${core?.optInt("remaining", 0) ?: "?"} core requests remaining"
+    }
 
-    private fun request(path: String): String {
+    /** User-facing diagnosis that does not echo credentials or HTTP response bodies. */
+    fun connectionDiagnostic(error: Throwable): String = when (error) {
+        is UnknownHostException -> "DNS could not resolve api.github.com. Check Private DNS or network settings."
+        is SocketTimeoutException -> "GitHub API timed out. Try again when the connection improves."
+        else -> error.message?.take(180) ?: "GitHub API unavailable."
+    }
+
+    private fun requestObject(path: String, context: Context): JSONObject = JSONObject(request(path, context))
+    private fun requestArray(path: String, context: Context): JSONArray = JSONArray(request(path, context))
+
+    private fun request(path: String, context: Context): String {
         val url = URL(path)
         if (url.protocol != "https" || url.host != "api.github.com")
             throw IOException("Only the public GitHub API is allowed")
@@ -131,10 +147,18 @@ internal object GitHubEcosystem {
             instanceFollowRedirects = false
             setRequestProperty("Accept", "application/vnd.github+json")
             setRequestProperty("User-Agent", "MMRL-LSPosed/0.1")
+            // Optional Keystore credential is confined to the exact github.com API host.
+            val token = try { LocalSettings.gitHubToken(context.applicationContext) }
+                catch (_: Exception) { throw IOException("Saved GitHub token cannot be read. Remove it in Settings.") }
+            if (token != null) setRequestProperty("Authorization", "Bearer $token")
         }
         try {
-            if (connection.responseCode != 200) throw IOException(
-                "GitHub returned HTTP ${connection.responseCode}; retry later or check rate limits")
+            val status = connection.responseCode
+            if (status != 200) throw IOException(when (status) {
+                401 -> "GitHub authentication rejected (HTTP 401). Remove or replace the token in Settings."
+                403, 429 -> "GitHub API rate limit or permission denied (HTTP $status)."
+                else -> "GitHub API returned HTTP $status."
+            })
             connection.inputStream.use { stream ->
                 val buffer = ByteArray(8192)
                 val data = ByteArrayOutputStream()
