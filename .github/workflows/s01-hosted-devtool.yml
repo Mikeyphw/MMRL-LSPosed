@@ -128,9 +128,9 @@ jobs:
             --root "$GITHUB_WORKSPACE"
 
       # S08: build instrumentation and disposable hook lab on the same hosted source.
-      # These APKs are NOT executed by GitHub Actions; only a consenting device host can run them.
+      # S08 root mutation classes are never executed on GitHub.
+      # The S09 emulator job runs only a fixed non-root Compose UI test class.
       - name: Build Android instrumentation + isolated Vector hook lab (hosted only)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
           set -euo pipefail
@@ -145,6 +145,23 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/hosted_s08_lab.py
+
+      - name: Stage ephemeral PR emulator pair (no signing secrets)
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci_emulator.py stage-pr \
+            --out "$RUNNER_TEMP/emulator-pr-pair"
+
+      - name: Publish ephemeral PR emulator APK pair
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mmrl-lsposed-pr-emulator-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/emulator-pr-pair/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Publish source-bound S08 AndroidTest and hook-lab APKs
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -193,9 +210,81 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  emulator-instrumentation:
+    name: API 36 non-root Compose AndroidTest (emulator)
+    needs: hosted-debug
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout exact CI source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Download stable-signed main APK (trusted main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mmrl-lsposed-signed-debug-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/emulator-main
+
+      - name: Download same-run instrumented test pair (trusted main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mmrl-lsposed-s08-lab-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/emulator-lab
+
+      - name: Download unsigned-release ephemeral PR test pair
+        if: github.event_name == 'pull_request'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mmrl-lsposed-pr-emulator-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/emulator-pr-pair
+
+      - name: Verify immutable APK source, hashes and package allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 scripts/ci_emulator.py verify --out "$RUNNER_TEMP/emulator-results"
+
+      - name: Enable KVM on Linux hosted runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run isolated non-root Compose UI instrumentation on Android 16
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          cores: 2
+          ram-size: 2048M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: python3 scripts/ci_emulator.py run --out "$RUNNER_TEMP/emulator-results"
+
+      - name: Publish API 36 instrumentation evidence (success or failure)
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mmrl-lsposed-emulator-api36-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/emulator-results/
+          if-no-files-found: warn
+          retention-days: 14
+
   attest-signed:
     name: GitHub provenance for stable-signed debug APK
-    needs: hosted-debug
+    needs: [hosted-debug, emulator-instrumentation]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15

@@ -55,8 +55,10 @@ dependencies {
     implementation(libs.libsu.service)
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
-    // AndroidTest APK executes on the physical Vector/KernelSU device, not GitHub runners.
+    // S08 privileged tests run only on a consenting real device.
+    // S09EmulatorUiTest runs on GitHub Actions emulator without any Vector mutation.
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.8.3")
     debugImplementation(libs.compose.ui.tooling)
 }

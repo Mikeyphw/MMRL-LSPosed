@@ -68,6 +68,7 @@ class S01Signing(unittest.TestCase):
         self.assertIn('mmrl-lsposed-pr-debug-ephemeral-', workflow)
         self.assertIn('mmrl-lsposed-signed-debug-', workflow)
         self.assertIn('needs: hosted-debug', workflow)
+        self.assertIn('needs: [hosted-debug, emulator-instrumentation]', workflow)
         jobs = workflow.split('  attest-signed:\n')
         self.assertEqual(len(jobs), 2)
         self.assertNotIn('id-token: write', jobs[0])

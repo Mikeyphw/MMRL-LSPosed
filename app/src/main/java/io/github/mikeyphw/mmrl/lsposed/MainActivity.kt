@@ -64,6 +64,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -289,7 +290,8 @@ private fun AppScaffold(
                     }
                 },
                 actions = {
-                    if (!nested) IconButton(onClick = onSettings) {
+                    if (!nested) IconButton(onClick = onSettings,
+                        modifier = Modifier.testTag("open_settings")) {
                         Icon(painterResource(R.drawable.ic_settings), contentDescription = stringResource(R.string.settings))
                     }
                 },
@@ -299,6 +301,7 @@ private fun AppScaffold(
             if (!nested) NavigationBar {
                 Section.entries.forEach { destination ->
                     NavigationBarItem(
+                        modifier = Modifier.testTag("nav_${destination.name.lowercase()}"),
                         selected = section == destination,
                         onClick = { onSectionChange(destination) },
                         icon = { Icon(painterResource(destination.icon), contentDescription = null) },
@@ -364,7 +367,8 @@ private fun HomePage(
                             is VectorState.Unavailable -> vector.reason
                         }, style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        OutlinedButton(onClick = onConnect, enabled = vector !is VectorState.Connecting) {
+                        OutlinedButton(onClick = onConnect, enabled = vector !is VectorState.Connecting,
+                            modifier = Modifier.testTag("vector_connect")) {
                             Text(if (vector is VectorState.Ready) "Refresh Vector" else "Connect to Vector")
                         }
                         if (vector is VectorState.Ready) Text(
@@ -430,7 +434,7 @@ private fun ModuleListPage(
                 OutlinedTextField(
                     value = query, onValueChange = { query = it.take(120) },
                     label = { Text(stringResource(R.string.search_modules)) },
-                    modifier = Modifier.weight(1f), singleLine = true,
+                    modifier = Modifier.weight(1f).testTag("module_search"), singleLine = true,
                 )
                 Spacer(Modifier.width(8.dp))
                 OutlinedButton(onClick = onRefresh) { Text(stringResource(R.string.refresh)) }
