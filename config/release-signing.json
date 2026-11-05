@@ -1,0 +1,15 @@
+{
+  "schema": "mmrl-lsposed.release-signing.v1",
+  "repository": "Mikeyphw/MMRL-LSPosed",
+  "application_id": "io.github.mikeyphw.mmrl.lsposed",
+  "ref": "refs/heads/main",
+  "environment": "mmrl-lsposed-release-signing",
+  "purpose": "isolated-release-candidate-only",
+  "enrollment": "pending",
+  "certificate_sha256": null,
+  "keystore_type": "PKCS12",
+  "key_alias": "mmrl_lsposed_release",
+  "publish_allowed": false,
+  "release_qualified": false,
+  "device_qualified": false
+}

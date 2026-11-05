@@ -1,0 +1,108 @@
+name: R4B Isolated Release Signing Candidate (Not a Published Release)
+
+on:
+  workflow_dispatch:
+    inputs:
+      sign_candidate:
+        description: 'Request gated signing of a non-release candidate (requires enrolled distinct cert and protected environment)'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r4b-isolated-signing-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  policy-audit:
+    name: Verify exact main source and release signer policy (no secrets)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact main commit without persisted credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Audit source, policy and enrollment (no key access)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$GITHUB_REPOSITORY" = 'Mikeyphw/MMRL-LSPosed'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -m unittest discover -s scripts/tests -q
+          if [[ '${{ inputs.sign_candidate }}' == 'true' ]]; then
+            python3 scripts/ci_production_signing.py preflight --require-enrolled
+          else
+            python3 scripts/ci_production_signing.py preflight
+          fi
+
+  sign-candidate:
+    name: Environment-gated production-key candidate only (never publish)
+    needs: [policy-audit]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.sign_candidate == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    environment:
+      name: mmrl-lsposed-release-signing
+    steps:
+      - name: Checkout exact protected source without persisted credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Set up Java 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          cmdline-tools-version: 15859902
+          packages: 'platforms;android-36 build-tools;36.0.0 platform-tools'
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        with:
+          validate-wrappers: true
+      - name: Build unsigned non-debuggable release package on hosted runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 scripts/ci_production_signing.py preflight --require-enrolled
+          ./gradlew --no-daemon :app:assembleRelease
+          test -s app/build/outputs/apk/release/app-release-unsigned.apk
+      - name: Apply independently enrolled production signing identity (secrets only here)
+        shell: bash
+        env:
+          MMRL_RELEASE_KEYSTORE_B64: ${{ secrets.MMRL_RELEASE_KEYSTORE_B64 }}
+          MMRL_RELEASE_STORE_PASSWORD: ${{ secrets.MMRL_RELEASE_STORE_PASSWORD }}
+          MMRL_RELEASE_KEY_PASSWORD: ${{ secrets.MMRL_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 scripts/ci_production_signing.py sign
+      - name: Independently recheck signed candidate, identity and receipt (no secrets)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci_production_signing.py verify
+      - name: Retain explicit non-release candidate for R4C device qualification
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mmrl-lsposed-r4b-unqualified-release-candidate-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/r4b-release-candidate/
+          if-no-files-found: error
+          retention-days: 7

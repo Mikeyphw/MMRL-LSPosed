@@ -1,3 +1,10 @@
+## R4B isolated production signer candidate — pending certificate enrollment (2026-11-05)
+
+- Adds a dedicated release-signing policy and an independent workflow_dispatch-only, `main`-only, environment-gated release **candidate** signing path.
+- Policy starts `pending` with no certificate fingerprint; signing refuses until the operator commits a separate independently verified production certificate and configures protected GitHub Environment secrets/reviewers.
+- Candidate signing builds unsigned `:app:assembleRelease` on GitHub Actions, checks package and signer continuity, and emits a clearly unqualified candidate receipt; no automatic publish, installation, Vector mutations, debug signer reuse or Devtool pin change.
+- R4A trusted-main signer/provenance acceptance and R4B PR CI remain independent gates. See `docs/R4B_ISOLATED_PRODUCTION_SIGNING.md`.
+
 ## R4A — Debug signer continuity and explicit release boundary (2026-11-05)
 
 R3C merged into `main` (`2f8dd6f89fedb01d27eb9cc5f43faa8ed6952694`). R4A adds read-only independent consistency checks in the trusted-main attestation job, binding the signed-debug bytes and public certificate policy to the R3C four-file Devtool evidence. PR CI and local source-contract tests do not qualify trusted-main signing: the new step is main-only. **No release APK, signing secret change, production signer, device qualification or release claim.** See `docs/R4A_TRUSTED_DEBUG_SIGNING_BOUNDARY.md`.
