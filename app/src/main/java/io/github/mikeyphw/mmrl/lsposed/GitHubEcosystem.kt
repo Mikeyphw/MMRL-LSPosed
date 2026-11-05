@@ -31,7 +31,8 @@ internal object GitHubEcosystem {
     }
     data class Release(val name: String, val tag: String, val htmlUrl: String, val assets: List<Asset>)
     data class Run(val id: Long, val status: String, val headSha: String,
-                   val attempt: Int, val htmlUrl: String) {
+                   val attempt: Int, val htmlUrl: String, val event: String = "",
+                   val headBranch: String = "") {
         val commit: String get() = headSha.take(12)
     }
     data class Artifact(val id: Long, val name: String, val bytes: Long,
@@ -93,8 +94,12 @@ internal object GitHubEcosystem {
             if (!Regex("[a-f0-9]{40}").matches(source) || attempt < 1) return@mapNotNull null
             val conclusion = obj.optString("conclusion")
                 .takeUnless { it.isBlank() || it == "null" }
+            val event = obj.optString("event")
+                .takeIf { it == "push" || it == "pull_request" } ?: ""
+            val headBranch = obj.optString("head_branch")
+                .takeIf { it == "main" } ?: ""
             Run(id, (conclusion ?: obj.optString("status")).take(30),
-                source, attempt, url)
+                source, attempt, url, event, headBranch)
         }
     }
 

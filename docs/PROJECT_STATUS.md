@@ -1,3 +1,10 @@
+## R3A Devtool federation and CI artifact evidence (candidate, 2026-11-05)
+
+- R2C remains PR-CI accepted; R3A must be applied only after R2C merges to `main`.
+- Adds source/attempt-aware CI artifact inventory with a current-only default and all-attempts override. Metadata categorization never claims signer or provenance validation.
+- Adds an unsigned, source-checked `federation-index.json` to existing hosted S01 Devtool evidence artifacts, preserving GitHub run/attempt, Devtool SHA, graph SHA, node identities, and debug-only qualification.
+- **R3A is unqualified until hosted CI, API36, trusted-main post-merge, and physical UX checks pass.** See `docs/R3A_DEVTOOL_ARTIFACT_FEDERATION.md`.
+
 ## R2C — source-bound release downloads (candidate, November 5, 2026)
 
 - Based on merged R2B `main` `5e7e14526e768b9d7e481ff8c7cb73191aa5fb98`.
