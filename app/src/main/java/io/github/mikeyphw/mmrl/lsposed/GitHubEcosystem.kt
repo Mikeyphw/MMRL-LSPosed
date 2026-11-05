@@ -103,6 +103,27 @@ internal object GitHubEcosystem {
         }
     }
 
+    /** Re-read the exact run immediately before retrieving an artifact ZIP.
+     * A rerun can advance run_attempt without changing the run ID or source SHA. */
+    fun freshRun(run: Run, context: Context): Boolean {
+        if (run.id <= 0 || run.attempt <= 0 || !Regex("[a-f0-9]{40}").matches(run.headSha))
+            return false
+        return runMatches(run, requestObject("$API/repos/$REPOSITORY/actions/runs/${run.id}", context))
+    }
+
+    internal fun runMatches(run: Run, obj: JSONObject): Boolean {
+        return obj.optLong("id", 0L) == run.id &&
+            obj.optString("html_url") == run.htmlUrl &&
+            obj.optString("head_sha") == run.headSha &&
+            obj.optInt("run_attempt", 0) == run.attempt &&
+            obj.optString("event") == run.event &&
+            obj.optString("status") == "completed" &&
+            obj.optString("conclusion") == "success" &&
+            (run.event == "pull_request" ||
+                (run.event == "push" && run.headBranch == "main" &&
+                    obj.optString("head_branch") == "main"))
+    }
+
     /** Public CI metadata, never binary download or signer qualification. */
     fun runArtifacts(run: Run, context: Context): List<Artifact> {
         require(run.id > 0 && run.attempt > 0 && Regex("[a-f0-9]{40}").matches(run.headSha))

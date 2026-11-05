@@ -192,6 +192,8 @@ internal fun DownloadsPage(padding: PaddingValues) {
     var message by rememberSaveable { mutableStateOf("") }
     var saved by androidx.compose.runtime.remember { mutableStateOf<VerifiedDownload.Saved?>(null) }
     var history by remember { mutableStateOf<List<VerifiedDownload.Saved>?>(null) }
+    var ciHistory by remember { mutableStateOf<List<CiArtifactDownload.Saved>?>(null) }
+    var ciSelected by remember { mutableStateOf<CiArtifactDownload.Saved?>(null) }
     var currentAttemptOnly by rememberSaveable { mutableStateOf(true) }
     var saving by remember { mutableStateOf(false) }
     var cancelRequested by remember { mutableStateOf(false) }
@@ -206,8 +208,9 @@ internal fun DownloadsPage(padding: PaddingValues) {
         item {
             Text("Verified downloads", style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold)
-            Text("First-party MMRL-LSPosed releases and GitHub Actions artifacts. " +
-                "SHA-256 proves file integrity, not APK signer trust or release qualification.",
+            Text("First-party releases and GitHub Actions artifacts. " +
+                "CI ZIP downloads require a GitHub token with Actions: read permission. " +
+                "SHA-256 is not APK signer trust or release qualification.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         item {
@@ -245,7 +248,8 @@ internal fun DownloadsPage(padding: PaddingValues) {
         }
         if (message.isNotBlank()) item { Text(message, color = MaterialTheme.colorScheme.error) }
         if (saving) item {
-            Text("Verified download: $progress%")
+            Text(if (tab == 1) "CI ZIP transfer: $progress% (digest checked after transfer)"
+                else "Release download: $progress% (digest checked after transfer)")
             OutlinedButton(onClick = { cancelSignal.set(true); cancelRequested = true },
                 enabled = !cancelRequested, modifier = Modifier.testTag("downloads_cancel")) {
                 Text(if (cancelRequested) "Cancelling…" else "Cancel download")
@@ -314,6 +318,57 @@ internal fun DownloadsPage(padding: PaddingValues) {
                     busy = false
                 }
             }, enabled = !busy) { Text("Open SHA-256 checked file") }
+        }
+        if (tab == 1) item {
+            OutlinedButton(onClick = {
+                busy = true; message = ""
+                coroutine.launch {
+                    withContext(Dispatchers.IO) { runCatching {
+                        CiArtifactDownload.listSaved(context.applicationContext)
+                    } }.onSuccess { ciHistory = it }.onFailure {
+                        message = "Could not verify saved CI archives"
+                    }
+                    busy = false
+                }
+            }, enabled = !busy, modifier = Modifier.testTag("ci_archive_history")) {
+                Text("My verified CI archives")
+            }
+        }
+        if (tab == 1 && ciHistory != null) {
+            if (ciHistory!!.isEmpty()) item { Text("No saved CI archives") }
+            items(ciHistory!!, key = { it.file.name }) { entry ->
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Run ${entry.runId} attempt ${entry.attempt} · artifact ${entry.artifactId}")
+                        Text("${entry.entryCount} ZIP entries · SHA-256 ${entry.sha256.take(16)}…")
+                        Text("GitHub archive hash verified; APK publisher and signer NOT qualified")
+                        OutlinedButton(onClick = { ciSelected = entry },
+                            modifier = Modifier.testTag("ci_archive_select")) {
+                            Text("Inspect saved archive")
+                        }
+                    }
+                }
+            }
+        }
+        if (tab == 1 && ciSelected != null) item {
+            val entry = ciSelected!!
+            Text("Saved CI archive · ${entry.entryCount} entries · no APK installation")
+            OutlinedButton(onClick = {
+                busy = true; message = ""
+                coroutine.launch {
+                    withContext(Dispatchers.IO) { runCatching {
+                        CiArtifactDownload.extractEvidence(context.applicationContext, entry)
+                    } }.onSuccess { count ->
+                        message = "Extracted $count bounded text evidence files to private storage; no APK extracted"
+                    }.onFailure {
+                        message = it.message?.take(180) ?: "Archive changed or no text evidence"
+                    }
+                    busy = false
+                }
+            }, enabled = !busy, modifier = Modifier.testTag("ci_archive_extract_evidence")) {
+                Text("Verify and extract text evidence")
+            }
         }
         if (tab == 0) {
             val entries = releases
@@ -454,6 +509,31 @@ internal fun DownloadsPage(padding: PaddingValues) {
                                 runCatching { openGitHub(context, artifact.url) }
                                     .onFailure { message = "No browser available" }
                             }, enabled = !artifact.expired) { Text("View on GitHub") }
+                            if (CiArtifactDownload.eligible(active, artifact)) {
+                                OutlinedButton(onClick = {
+                                    if (busy || saving) return@OutlinedButton
+                                    busy = true; saving = true; message = ""; progress = 0
+                                    cancelSignal.set(false); cancelRequested = false
+                                    coroutine.launch {
+                                        withContext(Dispatchers.IO) { runCatching {
+                                            CiArtifactDownload.save(context.applicationContext, active, artifact,
+                                                cancelled = { cancelSignal.get() },
+                                                onProgress = { count, length ->
+                                                    progress = (count * 100L / length).toInt()
+                                                })
+                                        } }.onSuccess { record ->
+                                            ciSelected = record
+                                            message = "CI ZIP SHA-256 and size verified. APK signer and release are NOT qualified."
+                                        }.onFailure { failure ->
+                                            message = failure.message?.take(180) ?: "CI download refused"
+                                        }
+                                        saving = false; busy = false
+                                    }
+                                }, enabled = !busy && !saving,
+                                    modifier = Modifier.testTag("ci_archive_download")) {
+                                    Text("Download and verify CI ZIP")
+                                }
+                            }
                         }
                     }
                 }
