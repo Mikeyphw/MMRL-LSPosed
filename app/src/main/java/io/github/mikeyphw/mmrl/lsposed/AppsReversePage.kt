@@ -53,7 +53,8 @@ internal fun AppsReversePage(
             (!scopedOnly || item.modules.isNotEmpty()) &&
                 (query.isBlank() || item.packageName.contains(query.trim(), ignoreCase = true) ||
                     item.label.contains(query.trim(), ignoreCase = true) ||
-                    item.modules.any { it.contains(query.trim(), ignoreCase = true) })
+                    item.modules.any { it.contains(query.trim(), ignoreCase = true) } ||
+                    "user:${item.userId}".contains(query.trim(), ignoreCase = true))
         }
     }
     LazyColumn(Modifier.fillMaxSize().padding(padding),
@@ -98,12 +99,13 @@ internal fun AppsReversePage(
                     FilterChip(selected = scopedOnly, onClick = { scopedOnly = true },
                         label = { Text("Configured targets") })
                     FilterChip(selected = !scopedOnly, onClick = { scopedOnly = false },
-                        label = { Text("All installed apps") })
+                        label = { Text("Visible apps + saved targets") })
                 }
             }
-            if (visible.isEmpty()) item { Text("No matching app targets") }
-            items(visible, key = { it.packageName }) { target ->
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+            if (visible.isEmpty()) item { Text("No matching app/user targets") }
+            items(visible, key = { it.key }) { target ->
+                Card(modifier = Modifier.testTag("apps_target_${target.key}"),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
                     Row(Modifier.fillMaxWidth().padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically) {
                         if (target.installed) AndroidView(factory = { ctx -> ImageView(ctx) },
@@ -116,12 +118,17 @@ internal fun AppsReversePage(
                         Text(target.label, style = MaterialTheme.typography.titleMedium)
                         Text(target.packageName, style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (!target.installed) Text("Target not installed on this device",
+                        Text(if (target.userId != snapshot.inventoryUserId)
+                            "Android user ${target.userId} · other profile (installation not checked)"
+                        else if (target.installed)
+                            "Current Android user ${target.userId}"
+                        else "Current user ${target.userId} · not installed or not visible",
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (target.systemTarget) Text("System target · read-only display",
                             color = MaterialTheme.colorScheme.error)
                         Text(if (target.modules.isEmpty()) "No saved module scopes found"
-                            else "Saved scope membership · ${target.modules.size} module(s)",
+                            else "Saved scope membership · ${target.modules.size} module(s) · read-only index",
                             style = MaterialTheme.typography.bodyMedium)
                         target.modules.forEach { module ->
                             TextButton(onClick = { onOpenModule(module) }) { Text(module) }

@@ -1,3 +1,23 @@
+## R1B consolidated candidate — screenshot-inspired Modules and sortable Vector catalog (2026-11-04)
+
+- Supersedes the **unapplied R1A overlay** and retains its profile-aware Apps saved-scope index and tests.
+- Adds compact status-grouped module rows with real APK icons, names, descriptions, version, API and saved-scope counts, search/filter/sort, refresh, and Discover shortcut.
+- Adds cached/offline Vector catalog ordering by release time, stars and name (six options), without a network request per sort.
+- Saved Vector enablement is not proof of live hooks; the Modules update banner is navigation only, not an unverified update count.
+- New code is **UNQUALIFIED until GitHub Actions JVM/lint/API36/provenance and physical UI checks pass**. No Vector write paths or signing changes.
+- Full details: `docs/R1B_MODULES_UI_AND_CATALOG_SORTING.md`.
+
+> **2026-11-04 S11 acceptance update:** Signed debug APK from hosted run
+> [41832873086](https://github.com/Mikeyphw/MMRL-LSPosed/actions/runs/41832873086)
+> (source `6c89740f86fb750ad9dc108f02065719314a7595`) matches the
+> installed APK on `localhost:5555` byte-for-byte (SHA-256
+> `028973ba6cff2aed68b553d3a60b88777aa1992f4d34f18f8ec645e41387517c`).
+> The maintainer reports that auto/manual Vector connection, direct-scope UX,
+> Discover, GitHub settings, Apps, and Downloads all worked on the phone.
+> **S11 manual functional acceptance passed.** This is not an independent S11
+> root-write restoration transcript, hook verification, or release qualification.
+> See `docs/S11_DEVICE_ACCEPTANCE.md`.
+
 > **2026-11-04:** S09+S10 hosted build, JVM, API 36 emulator, signing and provenance
 > passed in [run 41770774354](https://github.com/Mikeyphw/MMRL-LSPosed/actions/runs/41770774354)
 > at source `15ed223b6f1e9bd3d07ce74a2ecedcef1eef99e9`.

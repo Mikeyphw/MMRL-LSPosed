@@ -85,7 +85,7 @@ class S01SourceContracts(unittest.TestCase):
         en = ET.parse(resource_root / "values/strings.xml").getroot()
         translations = sorted(resource_root.glob("values-*/strings.xml"))
         self.assertEqual(translations, [],
-                         "S01 is English-only; unexpected localized string resources")
+                         "S11 main is English-only; do not require historical removed translations")
         src = (ROOT / "app/src/main/java/io/github/mikeyphw/mmrl/lsposed/MainActivity.kt").read_text()
         symbols = set(re.findall(r"R\.string\.([A-Za-z][A-Za-z0-9_]*)", src))
         defined = {e.get("name") for e in en}

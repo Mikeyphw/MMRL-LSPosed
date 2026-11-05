@@ -25,14 +25,48 @@ class S09S10PolicyTest {
         assertFalse(system.installed)
     }
 
-    @Test fun reverseScopeRefusesOtherAndroidUsersAndMalformedModules() {
+    @Test fun reverseScopesAreDistinctPerAndroidUser() {
+        val rows = AppsReverseIndex.reverse(setOf("com.example.target"), mapOf(
+            "com.example.modulea" to listOf(
+                VectorProtocol.Scope("com.example.target", 0),
+                VectorProtocol.Scope("com.example.target", 10)),
+            "com.example.moduleb" to listOf(VectorProtocol.Scope("com.example.target", 10)),
+        ))
+        val current = rows.single { it.key == "com.example.target/0" }
+        val other = rows.single { it.key == "com.example.target/10" }
+        assertTrue(current.installed)
+        assertEquals(listOf("com.example.modulea"), current.modules)
+        assertFalse(other.installed)
+        assertEquals(listOf("com.example.modulea", "com.example.moduleb"), other.modules)
+        assertEquals(10, other.userId)
+    }
+
+    @Test fun reverseIndexUsesCurrentProfileForPackageVisibility() {
+        val rows = AppsReverseIndex.reverse(setOf("com.example.target"), mapOf(
+            "com.example.module" to listOf(VectorProtocol.Scope("com.example.target", 0)),
+        ), inventoryUserId = 10)
+        val current = rows.single { it.key == "com.example.target/10" }
+        val another = rows.single { it.key == "com.example.target/0" }
+        assertTrue(current.installed)
+        assertTrue(current.modules.isEmpty())
+        assertFalse(another.installed)
+        assertEquals(listOf("com.example.module"), another.modules)
+    }
+
+    @Test fun reverseScopeIndexRejectsInvalidKeysWithoutRoot() {
         assertThrows(IllegalArgumentException::class.java) {
-            AppsReverseIndex.reverse(emptySet(), mapOf(
-                "com.example.module" to listOf(VectorProtocol.Scope("com.example.target", 10))))
+            AppsReverseIndex.reverse(emptySet(), mapOf("not-valid" to emptyList()))
         }
         assertThrows(IllegalArgumentException::class.java) {
-            AppsReverseIndex.reverse(emptySet(), mapOf(
-                "not-valid" to emptyList()))
+            AppsReverseIndex.reverse(emptySet(), mapOf("com.example.module" to
+                listOf(VectorProtocol.Scope("com.example.target", -1))))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            AppsReverseIndex.reverse(emptySet(), mapOf("com.example.module" to
+                listOf(VectorProtocol.Scope("../../bad", 0))))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            AppsReverseIndex.reverse(emptySet(), emptyMap(), inventoryUserId = -1)
         }
     }
 

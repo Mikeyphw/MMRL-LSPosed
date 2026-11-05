@@ -28,15 +28,18 @@ class FeaturesContracts(unittest.TestCase):
     def test_index_is_bounded_and_checks_user_and_snapshot(self):
         index = self.read('AppsReverseIndex.kt')
         for s in ('MAX_MODULES = 128', 'MAX_APPS = 5000',
-                  'scope.userId == 0', 'after.modules == baseline.modules',
+                  'require(scope.userId >= 0)', 'after.modules == baseline.modules',
                   'VectorReadOnly.scopes(context, module)',
                   'data class Target(', 'fun reverse('):
             self.assertIn(s, index)
         self.assertNotIn('VectorMutation', index)
         main = self.read('MainActivity.kt')
-        self.assertIn('ModuleStateFilter.ENABLED', main)
-        self.assertIn('ModuleStateFilter.DISABLED', main)
-        self.assertIn('Sort: enabled first', main)
+        model = self.read('ModuleListModel.kt')
+        self.assertIn('StateFilter.ENABLED', model)
+        self.assertIn('StateFilter.DISABLED', model)
+        self.assertIn('Sort.NAME_AZ', model)
+        self.assertIn('Sort.NAME_ZA', model)
+        self.assertIn('"modules_sort"', main)
         self.assertIn('Framework details', main)
         self.assertIn('Hook execution not verified', main)
 
@@ -135,7 +138,7 @@ class FeaturesContracts(unittest.TestCase):
     def test_hosted_jvm_suite_includes_new_pure_policy_tests(self):
         tests = ROOT/'app/src/test/java/io/github/mikeyphw/mmrl/lsposed/S09S10PolicyTest.kt'
         self.assertTrue(tests.is_file())
-        self.assertIn('reverseScopeRefusesOtherAndroidUsersAndMalformedModules', tests.read_text())
+        self.assertIn('reverseScopesAreDistinctPerAndroidUser', tests.read_text())
         flow = (ROOT/'.github/workflows/s01-hosted-devtool.yml').read_text()
         self.assertIn('Run independent Vector JVM protocol tests via native Devtool', flow)
         self.assertIn('API 36 non-root Compose AndroidTest (emulator)', flow)

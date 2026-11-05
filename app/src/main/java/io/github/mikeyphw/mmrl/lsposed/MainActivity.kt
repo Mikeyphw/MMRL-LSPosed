@@ -12,6 +12,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -33,6 +36,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -105,8 +111,6 @@ private enum class Section(val label: Int, val icon: Int) {
 }
 
 private enum class Appearance { SYSTEM, LIGHT, DARK, AMOLED }
-private enum class ModuleFilter { ALL, MODERN, LEGACY }
-private enum class ModuleStateFilter { ALL, ENABLED, DISABLED }
 private val Accent = Color(0xFF587FC7)
 
 @Composable
@@ -282,6 +286,8 @@ private fun StandaloneApp() {
                     combined, discoveryError, vector, scopeCounts, innerPadding,
                     onRefresh = { candidates = null; refreshKey++;
                         if (vector is VectorState.Ready) vectorRefresh++ },
+                    onDiscover = { section = Section.DISCOVER },
+                    onSettings = { settings = true },
                     onOpen = { selectedModule = it; scope = ScopeState.Idle; scopeOpen = false },
                 )
                 section == Section.APPS -> AppsReversePage(
@@ -315,7 +321,7 @@ private fun AppScaffold(
     val nested = settings || selectedModule != null || scopePreview
     Scaffold(
         topBar = {
-            CenterAlignedTopAppBar(
+            if (nested || section != Section.MODULES) CenterAlignedTopAppBar(
                 title = {
                     Text(
                         when {
@@ -447,6 +453,8 @@ private fun HomePage(
     }
 }
 
+/** R1: screenshot-inspired module overview. Every enabled/disabled flag is saved Vector
+ * configuration, never proof of active hooks. The catalog is never queried on this page. */
 @Composable
 private fun ModuleListPage(
     candidates: List<ModuleDiscovery.Candidate>?,
@@ -455,107 +463,230 @@ private fun ModuleListPage(
     scopeCounts: Map<String, Int>,
     padding: PaddingValues,
     onRefresh: () -> Unit,
+    onDiscover: () -> Unit,
+    onSettings: () -> Unit,
     onOpen: (ModuleDiscovery.Candidate) -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
-    var filter by rememberSaveable { mutableStateOf(ModuleFilter.ALL) }
-    var savedFilter by rememberSaveable { mutableStateOf(ModuleStateFilter.ALL) }
-    var enabledFirst by rememberSaveable { mutableStateOf(false) }
+    var format by rememberSaveable { mutableStateOf(ModuleListModel.FormatFilter.ALL) }
+    var status by rememberSaveable { mutableStateOf(ModuleListModel.StateFilter.ALL) }
+    var order by rememberSaveable { mutableStateOf(ModuleListModel.Sort.NAME_AZ) }
+    var filtersExpanded by rememberSaveable { mutableStateOf(false) }
+    var sortMenuExpanded by remember { mutableStateOf(false) }
     val saved = (vector as? VectorState.Ready)?.snapshot?.modules
-    val visible = remember(candidates, query, filter, savedFilter, enabledFirst, saved) {
-        val filtered = candidates.orEmpty().filter { item ->
-            (filter == ModuleFilter.ALL || (filter == ModuleFilter.MODERN &&
-                item.format in setOf(ModuleDiscovery.Format.MODERN, ModuleDiscovery.Format.BOTH)) ||
-                (filter == ModuleFilter.LEGACY &&
-                item.format in setOf(ModuleDiscovery.Format.LEGACY, ModuleDiscovery.Format.BOTH))) &&
-                (item.name.contains(query, ignoreCase = true) ||
-                    item.packageName.contains(query, ignoreCase = true)) &&
-                (savedFilter == ModuleStateFilter.ALL ||
-                    (saved != null && saved[item.packageName]?.enabled ==
-                        (savedFilter == ModuleStateFilter.ENABLED)))
-        }
-        if (enabledFirst && saved != null) filtered.sortedWith(
-            compareByDescending<ModuleDiscovery.Candidate> { saved[it.packageName]?.enabled == true }
-                .thenBy { it.name.lowercase() }) else filtered
+    val savedFlags = remember(saved) { saved?.mapValues { it.value.enabled } }
+    val groups = remember(candidates, savedFlags, query, format, status, order) {
+        ModuleListModel.groups(candidates.orEmpty(), savedFlags, query, format, status, order)
     }
-    Column(Modifier.fillMaxSize().padding(padding)) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(stringResource(R.string.modules_description), color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = query, onValueChange = { query = it.take(120) },
-                    label = { Text(stringResource(R.string.search_modules)) },
-                    modifier = Modifier.weight(1f).testTag("module_search"), singleLine = true,
-                )
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = onRefresh) { Text(stringResource(R.string.refresh)) }
+    val shown = groups.sumOf { it.modules.size }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(padding),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item(key = "module_header") {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Modules", style = MaterialTheme.typography.headlineLarge,
+                        fontWeight = FontWeight.Bold)
+                    Text(
+                        if (saved == null) "${candidates?.size ?: 0} detected · Vector status unavailable"
+                        else "${saved.values.count { it.enabled }} of ${saved.size} enabled in Vector",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("module_status_summary"),
+                    )
+                }
+                IconButton(onClick = onRefresh, modifier = Modifier.testTag("modules_refresh")) {
+                    Icon(painterResource(R.drawable.ic_refresh), contentDescription =
+                        if (vector is VectorState.Ready) "Refresh installed modules and saved Vector state"
+                        else "Refresh installed modules")
+                }
+                IconButton(onClick = onDiscover, modifier = Modifier.testTag("modules_repository")) {
+                    Icon(painterResource(R.drawable.ic_discover), contentDescription = "Open module repository")
+                }
+                IconButton(onClick = onSettings, modifier = Modifier.testTag("open_settings")) {
+                    Icon(painterResource(R.drawable.ic_settings), contentDescription = "Settings")
+                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = filter == ModuleFilter.ALL, onClick = { filter = ModuleFilter.ALL },
-                    label = { Text(stringResource(R.string.all)) })
-                FilterChip(selected = filter == ModuleFilter.MODERN, onClick = { filter = ModuleFilter.MODERN },
-                    label = { Text(stringResource(R.string.modern)) })
-                FilterChip(selected = filter == ModuleFilter.LEGACY, onClick = { filter = ModuleFilter.LEGACY },
-                    label = { Text(stringResource(R.string.legacy)) })
-            }
-            if (saved != null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = savedFilter == ModuleStateFilter.ALL,
-                    onClick = { savedFilter = ModuleStateFilter.ALL }, label = { Text("Any status") })
-                FilterChip(selected = savedFilter == ModuleStateFilter.ENABLED,
-                    onClick = { savedFilter = ModuleStateFilter.ENABLED }, label = { Text("Enabled") })
-                FilterChip(selected = savedFilter == ModuleStateFilter.DISABLED,
-                    onClick = { savedFilter = ModuleStateFilter.DISABLED }, label = { Text("Disabled") })
-            }
-            FilterChip(selected = enabledFirst, onClick = { enabledFirst = !enabledFirst },
-                enabled = saved != null, label = { Text("Sort: enabled first") })
         }
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            if (hasError) item { SoftInfo(R.string.module_scan_error) }
-            else if (candidates == null) item { SoftInfo(R.string.loading) }
-            else if (candidates.isEmpty()) item {
+        item(key = "module_search_box") {
+            OutlinedTextField(
+                value = query, onValueChange = { query = it.take(120) },
+                label = { Text(stringResource(R.string.search_modules)) },
+                leadingIcon = { Icon(painterResource(R.drawable.ic_search), contentDescription = null) },
+                trailingIcon = {
+                    IconButton(onClick = { filtersExpanded = !filtersExpanded },
+                        modifier = Modifier.testTag("module_filter_toggle")) {
+                        Icon(painterResource(R.drawable.ic_filter),
+                            contentDescription = if (filtersExpanded) "Hide filters and sorting" else "Show filters and sorting")
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().testTag("module_search"),
+                singleLine = true, shape = RoundedCornerShape(24.dp),
+            )
+        }
+        item(key = "module_discover_link") {
+            Surface(
+                modifier = Modifier.fillMaxWidth().clickable(onClick = onDiscover)
+                    .testTag("modules_check_updates"),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(18.dp),
+            ) {
+                Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Icon(painterResource(R.drawable.ic_discover), contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary)
+                    Column(Modifier.weight(1f)) {
+                        Text("Browse updates in the repository", style = MaterialTheme.typography.titleSmall)
+                        Text("Compare community releases in Discover",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+        if (filtersExpanded) item(key = "module_filters") {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Module type", style = MaterialTheme.typography.labelMedium)
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ModuleListModel.FormatFilter.entries.forEach { f ->
+                        FilterChip(selected = format == f, onClick = { format = f },
+                            label = { Text(when (f) {
+                                ModuleListModel.FormatFilter.ALL -> "All types"
+                                ModuleListModel.FormatFilter.MODERN -> "Modern"
+                                ModuleListModel.FormatFilter.LEGACY -> "Legacy"
+                            }) })
+                    }
+                }
+                Text("Saved Vector status", style = MaterialTheme.typography.labelMedium)
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ModuleListModel.StateFilter.entries.forEach { f ->
+                        FilterChip(selected = status == f, onClick = { status = f },
+                            enabled = saved != null || f == ModuleListModel.StateFilter.ALL,
+                            label = { Text(when (f) {
+                                ModuleListModel.StateFilter.ALL -> "All"
+                                ModuleListModel.StateFilter.ENABLED -> "Enabled"
+                                ModuleListModel.StateFilter.DISABLED -> "Disabled"
+                                ModuleListModel.StateFilter.NOT_INDEXED -> "Not indexed"
+                            }) })
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Sort", style = MaterialTheme.typography.labelMedium)
+                    Box {
+                        OutlinedButton(onClick = { sortMenuExpanded = true },
+                            modifier = Modifier.testTag("modules_sort")) {
+                            Text(when (order) {
+                                ModuleListModel.Sort.NAME_AZ -> "Name A–Z"
+                                ModuleListModel.Sort.NAME_ZA -> "Name Z–A"
+                                ModuleListModel.Sort.API_DESC -> "API highest"
+                                ModuleListModel.Sort.PACKAGE -> "Package A–Z"
+                            })
+                        }
+                        DropdownMenu(expanded = sortMenuExpanded,
+                            onDismissRequest = { sortMenuExpanded = false }) {
+                            ModuleListModel.Sort.entries.forEach { s ->
+                                DropdownMenuItem(text = { Text(when (s) {
+                                    ModuleListModel.Sort.NAME_AZ -> "Name A–Z"
+                                    ModuleListModel.Sort.NAME_ZA -> "Name Z–A"
+                                    ModuleListModel.Sort.API_DESC -> "API highest"
+                                    ModuleListModel.Sort.PACKAGE -> "Package A–Z"
+                                }) }, onClick = { order = s; sortMenuExpanded = false },
+                                    modifier = Modifier.testTag("modules_sort_${s.name.lowercase()}"))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        item(key = "module_count") {
+            Text("$shown matching modules · saved state does not verify live hooks",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        when {
+            hasError -> item(key = "module_error") { SoftInfo(R.string.module_scan_error) }
+            candidates == null -> item(key = "module_loading") { SoftInfo(R.string.loading) }
+            candidates.isEmpty() -> item(key = "module_empty") {
                 SoftInfo(R.string.empty_modules)
                 Text(stringResource(R.string.empty_modules_detail),
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            else if (visible.isEmpty()) item { SoftInfo(R.string.search_empty) }
-            else items(visible, key = { it.packageName }) { module ->
-                Card(modifier = Modifier.fillMaxWidth().clickable { onOpen(module) },
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
-                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        InstalledAppIcon(module.packageName)
-                        Spacer(Modifier.width(13.dp))
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(module.name, style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(module.packageName, style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(formatLabel(module.format), style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary)
-                            if (module.versionName.isNotBlank()) Text(
-                                "Version ${module.versionName}", style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            val stored = (vector as? VectorState.Ready)?.snapshot?.modules?.get(module.packageName)
-                            if (stored != null) Text(
-                                if (stored.enabled) "Enabled in Vector · saved state"
-                                else "Disabled in Vector · saved state",
-                                color = if (stored.enabled) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.labelMedium)
-                            if (stored != null) Text(
-                                scopeCounts[module.packageName]?.let { "$it saved scope targets (last read)" }
-                                    ?: "Saved scope count not loaded",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            else if (vector is VectorState.Ready) Text("Not in Vector inventory",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            groups.isEmpty() -> item(key = "module_nomatch") { SoftInfo(R.string.search_empty) }
+            else -> groups.forEach { group ->
+                item(key = "module_group_${group.kind.name}") {
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(when (group.kind) {
+                            ModuleListModel.GroupKind.ENABLED -> "Enabled in Vector"
+                            ModuleListModel.GroupKind.DISABLED -> "Disabled in Vector"
+                            ModuleListModel.GroupKind.NOT_INDEXED -> "Not in Vector inventory"
+                            ModuleListModel.GroupKind.UNKNOWN -> "Installed modules"
+                        }, style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary)
+                        Text("${group.modules.size}", style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                items(group.modules, key = { "module_${it.packageName}" }) { module ->
+                    val stored = saved?.get(module.packageName)
+                    Column(Modifier.fillMaxWidth().clickable { onOpen(module) }
+                        .testTag("module_row_${module.packageName}")
+                        .padding(top = 6.dp, bottom = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.Top,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                            InstalledAppIcon(module.packageName, 56)
+                            Column(Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Row(verticalAlignment = Alignment.Top,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(module.name, modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    if (module.versionName.isNotBlank()) Text(module.versionName,
+                                        modifier = Modifier.widthIn(max = 112.dp),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                Text(module.description.ifBlank { module.packageName },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    Text(formatLabel(module.format),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        maxLines = 1)
+                                    if (module.minApiVersion > 0) Text("API ${module.minApiVersion}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    scopeCounts[module.packageName]?.let { count ->
+                                        Text("$count saved scopes", style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                                if (module.format == ModuleDiscovery.Format.UNKNOWN) Text(
+                                    "APK not detected · Vector entry only",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                else if (stored == null && saved != null) Text(
+                                    "APK detected · no Vector entry",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
                 }
             }

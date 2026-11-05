@@ -43,6 +43,8 @@ class S09EmulatorUiTest {
         compose.onNodeWithText("Search modules").assertExists()
         compose.onNodeWithTag("module_search").performTextInput("ci-test-absent-module")
         compose.onNodeWithTag("module_search").assertTextContains("ci-test-absent-module")
+        compose.onNodeWithTag("module_filter_toggle").performClick()
+        compose.onNodeWithTag("modules_repository").assertExists()
         assertNoImplicitVectorConnection()
     }
 
@@ -56,6 +58,8 @@ class S09EmulatorUiTest {
         compose.onNodeWithTag("discover_search").assertExists()
         compose.onNodeWithTag("discover_query").performTextInput("lsposed")
         compose.onNodeWithTag("discover_query").assertTextContains("lsposed")
+        compose.onNodeWithTag("discover_sort").performClick()
+        compose.onNodeWithTag("discover_sort_most_stars").performClick()
         compose.onNodeWithTag("nav_downloads").performClick()
         compose.onNodeWithText("Verified downloads").assertExists()
         compose.onNodeWithTag("downloads_load").assertExists()

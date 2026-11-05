@@ -73,16 +73,87 @@ def host_android_tool(name: str) -> Path:
     return tool
 
 
+
+def parse_xmltree_instrumentation(output: str) -> tuple[str | None, str | None]:
+    """Read exact instrumentation runner/target from compiled AndroidManifest tree.
+
+    Restrict to instrumentation nodes, reject duplicate/ambiguous values,
+    and require exact Android platform attribute IDs.
+    """
+    found: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    root_depth = -1
+    for line in output.splitlines():
+        element = re.match(r"^(\s*)E:\s+([\w.-]+)(?:\s|$)", line)
+        if element:
+            depth = len(element.group(1))
+            if current is not None and depth <= root_depth:
+                found.append(current)
+                current = None
+            if element.group(2) == 'instrumentation':
+                if current is not None:
+                    raise ValueError('Nested instrumentation element')
+                current = {}
+                root_depth = depth
+            continue
+        if current is None:
+            continue
+        attribute = re.match(
+            r'^\s*A:\s+(?:android:|http://schemas.android.com/apk/res/android:)'
+            r'(name|targetPackage)\(0x([0-9A-Fa-f]{8})\)="([^"\r\n]*)"', line)
+        if not attribute:
+            continue
+        key, resource_id, value = attribute.groups()
+        if resource_id.lower() != {'name':'01010003', 'targetPackage':'01010021'}[key]:
+            raise ValueError('Unexpected instrumentation manifest attribute ID')
+        if key in current:
+            raise ValueError('Duplicate instrumentation manifest attribute')
+        current[key] = value
+    if current is not None:
+        found.append(current)
+    if not found:
+        return None, None
+    if len(found) != 1 or set(found[0]) != {'name', 'targetPackage'}:
+        raise ValueError('Incomplete or ambiguous instrumentation manifest XML')
+    runner, target = found[0]['name'], found[0]['targetPackage']
+    if not runner or not target:
+        raise ValueError('Empty instrumentation runner/target manifest XML')
+    # This is a source-locked PR gate, not a generic Android manifest reader.
+    # Reject truncation or forged metadata here, before artifact staging.
+    if runner != RUNNER or target != PACKAGE:
+        raise ValueError('Unexpected instrumentation runner/target manifest XML')
+    return target, runner
+
+
 def package_badging(apk: Path) -> tuple[str, str | None, str | None]:
     """Return manifest package, instrumentation target and runner from aapt."""
     out = run_checked(str(host_android_tool('aapt')), 'dump', 'badging', str(apk)).stdout
     match = re.search(r"(?m)^package: name='([^']+)'", out)
     if not match:
         raise ValueError('APK package manifest not readable')
-    instrumentation = re.search(
-        r"(?m)^instrumentation: name='([^']+)' targetPackage='([^']+)'", out)
-    return (match.group(1), instrumentation.group(2) if instrumentation else None,
-            instrumentation.group(1) if instrumentation else None)
+    # Android build tools can insert label or other attributes between the
+    # runner and targetPackage, or reorder those attributes entirely.
+    # Extract exactly one instrumentation entry and parse named attributes,
+    # never infer a target/runner from untrusted position-dependent text.
+    entries = re.findall(r"(?m)^instrumentation:\s+([^\r\n]+)$", out)
+    if not entries:
+        # AAPT badging sometimes omits the instrumentation record completely.
+        # Verify compiled AndroidManifest.xml instead of inferring metadata.
+        xmltree = run_checked(str(host_android_tool('aapt')), 'dump',
+                              'xmltree', str(apk), 'AndroidManifest.xml').stdout
+        target, runner = parse_xmltree_instrumentation(xmltree)
+        return match.group(1), target, runner
+    if len(entries) != 1:
+        raise ValueError('Expected exactly one instrumentation manifest entry')
+    attributes = re.findall(
+        r"(?<!\S)([A-Za-z][A-Za-z0-9]*)='([^'\r\n]*)'", entries[0])
+    if len(attributes) != len({key for key, _ in attributes}):
+        raise ValueError('Duplicate instrumentation manifest attribute')
+    attrs = dict(attributes)
+    runner, target = attrs.get('name'), attrs.get('targetPackage')
+    if not runner or not target:
+        raise ValueError('Incomplete instrumentation runner/target manifest')
+    return match.group(1), target, runner
 
 
 def signing_certificate(apk: Path) -> str:
@@ -103,7 +174,9 @@ def stage_pr(directory: Path):
     test_pkg, test_target, test_runner = package_badging(test)
     if (app_pkg, app_target, app_runner) != (PACKAGE, None, None) or \
        (test_pkg, test_target, test_runner) != (TEST_PACKAGE, PACKAGE, RUNNER):
-        raise ValueError('PR APK manifest package/runner mismatch')
+        raise ValueError('PR APK manifest package/runner mismatch: '
+                         f'app={(app_pkg, app_target, app_runner)!r}; '
+                         f'test={(test_pkg, test_target, test_runner)!r}')
     certificate = signing_certificate(app)
     if signing_certificate(test) != certificate:
         raise ValueError('PR APK instrumentation signer differs from main APK')

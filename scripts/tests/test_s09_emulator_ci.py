@@ -56,7 +56,7 @@ class EmulatorGateContracts(unittest.TestCase):
         src=(ROOT/'app/src/main/java/io/github/mikeyphw/mmrl/lsposed/MainActivity.kt').read_text()
         self.assertIn('Modifier.testTag("nav_${destination.name.lowercase()}")',src)
         self.assertIn('Modifier.testTag("vector_connect")',src)
-        self.assertIn('Modifier.weight(1f).testTag("module_search")',src)
+        self.assertIn('Modifier.fillMaxWidth().testTag("module_search")',src)
         self.assertIn('Modifier.testTag("open_settings")',src)
 
     def test_runner_rejects_false_junit_success(self):
@@ -136,6 +136,102 @@ class EmulatorGateContracts(unittest.TestCase):
                  patch.object(ci,'signing_certificate',side_effect=['a'*64,'b'*64]):
                 with self.assertRaisesRegex(ValueError,'signer differs'):
                     ci.stage_pr(root/'stage2')
+
+    def test_pr_badging_allows_intervening_label_and_attribute_order(self):
+        # AGP/AAPT may add label or other attributes between runner and target.
+        cases = (
+            "instrumentation: name='androidx.test.runner.AndroidJUnitRunner' "
+            "label='Instrumentation tests' "
+            "targetPackage='io.github.mikeyphw.mmrl.lsposed.debug'",
+            "instrumentation: targetPackage='io.github.mikeyphw.mmrl.lsposed.debug' "
+            "functionalTest='0' name='androidx.test.runner.AndroidJUnitRunner' "
+            "label=''",
+        )
+        for line in cases:
+            with self.subTest(line=line), \
+                 patch.object(ci,'host_android_tool',return_value=Path('/mock/aapt')), \
+                 patch.object(ci,'run_checked',return_value=SimpleNamespace(stdout=(
+                     f"package: name='{ci.TEST_PACKAGE}' versionCode='1'\n{line}\n"))):
+                self.assertEqual(ci.package_badging(Path('test.apk')),
+                                 (ci.TEST_PACKAGE, ci.PACKAGE, ci.RUNNER))
+
+    def test_pr_badging_refuses_missing_duplicate_and_incomplete_entries(self):
+        invalid = (
+            "instrumentation: name='androidx.test.runner.AndroidJUnitRunner' label=''",
+            "instrumentation: name='androidx.test.runner.AndroidJUnitRunner' "
+            "name='other.runner' targetPackage='io.github.mikeyphw.mmrl.lsposed.debug'",
+            "instrumentation: name='androidx.test.runner.AndroidJUnitRunner' "
+            "targetPackage='io.github.mikeyphw.mmrl.lsposed.debug'\n"
+            "instrumentation: name='another.runner' targetPackage='other.pkg'",
+        )
+        for line in invalid:
+            with self.subTest(line=line), \
+                 patch.object(ci,'host_android_tool',return_value=Path('/mock/aapt')), \
+                 patch.object(ci,'run_checked',return_value=SimpleNamespace(stdout=(
+                     f"package: name='{ci.TEST_PACKAGE}' versionCode='1'\n{line}\n"))):
+                with self.assertRaisesRegex(ValueError,'instrumentation'):
+                    ci.package_badging(Path('test.apk'))
+
+
+    def test_xmltree_fallback_extracts_real_instrumentation(self):
+        xmltree=("N: android=http://schemas.android.com/apk/res/android\n"
+                 "  E: manifest (line=2)\n"
+                 "    A: package=\"io.github.mikeyphw.mmrl.lsposed.debug.test\"\n"
+                 "    E: instrumentation (line=9)\n"
+                 "      A: android:label(0x01010001)=\"Tests\" (Raw: \"Tests\")\n"
+                 "      A: android:name(0x01010003)=\"androidx.test.runner.AndroidJUnitRunner\"\n"
+                 "      A: android:targetPackage(0x01010021)=\"io.github.mikeyphw.mmrl.lsposed.debug\"\n")
+        badging=f"package: name='{ci.TEST_PACKAGE}' versionCode='1'\n"
+        with patch.object(ci,'host_android_tool',return_value=Path('/mock/aapt')), \
+             patch.object(ci,'run_checked',side_effect=[
+                 SimpleNamespace(stdout=badging),SimpleNamespace(stdout=xmltree)]):
+            self.assertEqual(ci.package_badging(Path('test.apk')),
+                             (ci.TEST_PACKAGE,ci.PACKAGE,ci.RUNNER))
+
+    def test_xmltree_fallback_absent_instrumentation_is_not_invented(self):
+        sample=("E: manifest (line=1)\n"
+                "  A: package=\"io.github.mikeyphw.mmrl.lsposed.debug\"\n"
+                "  E: application (line=4)\n")
+        self.assertEqual(ci.parse_xmltree_instrumentation(sample),(None,None))
+        badging=f"package: name='{ci.PACKAGE}' versionCode='1'\n"
+        with patch.object(ci,'host_android_tool',return_value=Path('/mock/aapt')), \
+             patch.object(ci,'run_checked',side_effect=[
+                 SimpleNamespace(stdout=badging),SimpleNamespace(stdout=sample)]):
+            self.assertEqual(ci.package_badging(Path('app.apk')),(ci.PACKAGE,None,None))
+
+    def test_xmltree_fallback_refuses_incomplete_ambiguous_or_forged(self):
+        base="  E: manifest (line=1)\n    E: instrumentation (line=3)\n"
+        good=("      A: android:name(0x01010003)=\"androidx.test.runner.AndroidJUnitRunner\"\n"
+              "      A: android:targetPackage(0x01010021)=\"io.github.mikeyphw.mmrl.lsposed.debug\"\n")
+        cases=(base+"      A: android:name(0x01010003)=\"runner\"\n",
+               base+good+"    E: instrumentation (line=12)\n"+good,
+               base+good+"      A: android:name(0x01010003)=\"other.runner\"\n",
+               base+good.replace('targetPackage(0x01010021)','targetPackage(0x01010003)'),
+               base+good.replace('AndroidJUnitRunner',''))
+        for tree in cases:
+            with self.subTest(tree=tree):
+                with self.assertRaises(ValueError):
+                    ci.parse_xmltree_instrumentation(tree)
+
+    def test_xmltree_fallback_only_accepts_exact_allowlisted_identity(self):
+        good=("  E: manifest (line=1)\n"
+              "    E: instrumentation (line=3)\n"
+              "      A: android:name(0x01010003)=\"androidx.test.runner.AndroidJUnitRunner\"\n"
+              "      A: android:targetPackage(0x01010021)=\"io.github.mikeyphw.mmrl.lsposed.debug\"\n")
+        self.assertEqual(ci.parse_xmltree_instrumentation(good),
+                         (ci.PACKAGE, ci.RUNNER))
+        for invalid in (
+            good.replace('AndroidJUnitRunner', ''),
+            good.replace('AndroidJUnitRunner', 'AndroidJUnitRunnerExtra'),
+            good.replace('androidx.test.runner.', 'androidx.test.unknown.'),
+            good.replace('io.github.mikeyphw.mmrl.lsposed.debug',
+                         'io.github.mikeyphw.mmrl.lsposed'),
+            good.replace('io.github.mikeyphw.mmrl.lsposed.debug',
+                         'io.github.mikeyphw.mmrl.lsposed.debug.evil'),
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, 'Unexpected instrumentation'):
+                    ci.parse_xmltree_instrumentation(invalid)
 
     def test_manifest_package_and_signer_extraction(self):
         sample=("package: name='io.github.mikeyphw.mmrl.lsposed.debug.test' versionCode='1'\n"
