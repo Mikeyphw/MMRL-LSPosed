@@ -328,6 +328,33 @@ jobs:
           name: mmrl-lsposed-signed-debug-${{ github.run_id }}-attempt${{ github.run_attempt }}
           path: ${{ runner.temp }}/signed-debug
 
+      # R4A_TRUSTED_DEBUG_BOUNDARY_BEGIN
+      - name: Checkout source-pinned debug signing policy and verifier
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Download same-run Devtool federation evidence for signer continuity
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mmrl-lsposed-s01-evidence-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/r4a-evidence
+
+      - name: Verify trusted debug signer continuity and reject release claims
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 scripts/ci_release_boundary.py verify \
+            --signed "$RUNNER_TEMP/signed-debug" \
+            --evidence "$RUNNER_TEMP/r4a-evidence" \
+            --policy config/debug-signing.json \
+            --source "$GITHUB_SHA" \
+            --run "$GITHUB_RUN_ID" \
+            --attempt "$GITHUB_RUN_ATTEMPT" \
+            --devtool-sha b164463db51e2cffd12f753043b9e55a08cc43ae
+      # R4A_TRUSTED_DEBUG_BOUNDARY_END
+
       - name: Authenticate signed debug receipt and exact APK hash
         shell: bash
         run: |

@@ -1,3 +1,7 @@
+## R4A — Debug signer continuity and explicit release boundary (2026-11-05)
+
+R3C merged into `main` (`2f8dd6f89fedb01d27eb9cc5f43faa8ed6952694`). R4A adds read-only independent consistency checks in the trusted-main attestation job, binding the signed-debug bytes and public certificate policy to the R3C four-file Devtool evidence. PR CI and local source-contract tests do not qualify trusted-main signing: the new step is main-only. **No release APK, signing secret change, production signer, device qualification or release claim.** See `docs/R4A_TRUSTED_DEBUG_SIGNING_BOUNDARY.md`.
+
 ## R3C — Portable cross-consumer Devtool evidence contract (candidate; 2026-11-05)
 
 - Adds a fail-closed, stdlib-only producer/consumer verifier for the existing S01 Devtool plan, verification, and R3A federation-index receipts. GitHub Actions now publishes a fourth self-described JSON contract beside them, anchored to source SHA, run, attempt, graph, reviewed Devtool pin, APK digest and debug signer.
