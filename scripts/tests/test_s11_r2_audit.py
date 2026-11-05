@@ -10,7 +10,8 @@ class S11R2Audit(unittest.TestCase):
         self.assertIn('VectorModuleCatalog.cached(context.applicationContext)',page)
         self.assertLess(page.index('if (savedCatalog != null) catalog = savedCatalog'),page.index('load()\n    }'))
         self.assertIn('fun cached(context: Context)',cache)
-        self.assertIn('val previous = cached(context)',cache)
+        self.assertIn('val savedModules = runCatching { savedText?.let(::parse) }',cache)
+        self.assertIn('if (savedModules != null) return Result(savedModules, cached = true,',cache)
         self.assertIn('instanceFollowRedirects = false',cache)
         self.assertNotIn('Authorization',cache)
     def test_unknown_host_timeout_and_http_auth_diagnoses_distinctly(self):

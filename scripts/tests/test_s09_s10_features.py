@@ -57,7 +57,8 @@ class FeaturesContracts(unittest.TestCase):
         catalog = self.read('VectorModuleCatalog.kt')
         self.assertIn('https://backup.modules.lsposed.org/modules.json', catalog)
         self.assertNotIn('Authorization', catalog)
-        self.assertIn('parse(cache.readText())', catalog)
+        self.assertIn('val saved = cacheText(cache)', catalog)
+        self.assertIn('Result(parse(saved)', catalog)
         api = self.read('GitHubEcosystem.kt')
         for s in ('"api.github.com"', 'connectTimeout = 7_000',
                   'readTimeout = 10_000', 'MAX_RESPONSE = 1_048_576',

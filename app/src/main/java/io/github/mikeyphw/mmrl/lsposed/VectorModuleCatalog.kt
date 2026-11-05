@@ -2,11 +2,13 @@ package io.github.mikeyphw.mmrl.lsposed
 
 import android.content.Context
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -23,6 +25,12 @@ import java.time.ZoneOffset
 internal object VectorModuleCatalog {
     private const val LIST_URL = "https://backup.modules.lsposed.org/modules.json"
     private const val MAX_BYTES = 6 * 1024 * 1024
+    private const val MAX_ETAG_BYTES = 160
+    private const val CACHE_FILE = "vector_module_catalog_v1.json"
+    private const val META_FILE = "vector_module_catalog_v1.meta.json"
+    private const val CACHE_SCHEMA = "mmrl-lsposed.vector-catalog-etag.v1"
+    // RFC 9110 opaque-tag subset: no embedded quotes, controls, spaces or CRLF.
+    private val SAFE_ETAG = Regex("(?:W/)?\"[!#-~]*\"")
     private val PACKAGE = Regex("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+")
 
     data class Module(
@@ -97,33 +105,99 @@ internal object VectorModuleCatalog {
         return sort(modules, Sort.UPDATED_NEWEST)
     }
 
+    /** Metadata contains only a public server validator, bound to the exact cache bytes.
+     *  It never contains tokens or privileged-device data. The SHA is a consistency
+     *  check, NOT a signature or evidence that a publisher is trustworthy. */
+    internal fun cacheReceipt(body: String, etag: String?): String? {
+        if (etag == null || etag.length !in 2..MAX_ETAG_BYTES || !SAFE_ETAG.matches(etag))
+            return null
+        return JSONObject()
+            .put("schema", CACHE_SCHEMA)
+            .put("etag", etag)
+            .put("cache_sha256", sha256(body))
+            .toString()
+    }
+
+    internal fun validatedCacheEtag(receipt: String?, body: String?): String? {
+        if (receipt == null || body == null || receipt.length > 1024 ||
+            body.toByteArray(Charsets.UTF_8).size > MAX_BYTES) return null
+        return runCatching {
+            val data = JSONObject(receipt)
+            val etag = data.getString("etag")
+            if (data.optString("schema") != CACHE_SCHEMA ||
+                !data.optString("cache_sha256").equals(sha256(body), ignoreCase = false) ||
+                etag.length !in 2..MAX_ETAG_BYTES || !SAFE_ETAG.matches(etag)) null
+            else etag
+        }.getOrNull()
+    }
+
+    private fun sha256(text: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(text.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(java.util.Locale.ROOT, it.toInt() and 255) }
+
+    private fun cacheText(cache: File): String? = runCatching {
+        if (!cache.isFile || cache.length() !in 1L..MAX_BYTES.toLong()) null
+        else cache.readText(Charsets.UTF_8)
+    }.getOrNull()
+
+    private data class Reply(val body: String?, val etag: String?, val notModified: Boolean)
+
     /** Serve the last valid catalog immediately, before attempting DNS/network. */
     fun cached(context: Context): Result? = runCatching {
-        val cache = File(context.cacheDir, "vector_module_catalog_v1.json")
-        if (!cache.isFile || cache.length() > MAX_BYTES) return@runCatching null
-        Result(parse(cache.readText()), cached = true,
+        val cache = File(context.cacheDir, CACHE_FILE)
+        val saved = cacheText(cache) ?: return@runCatching null
+        Result(parse(saved), cached = true,
             warning = "Showing saved LSPosed catalog · refresh when online")
     }.getOrNull()
 
+    /** Refresh is only invoked by the explicit Discover action. 304 is usable only
+     *  with a previously parsed body and an exact cache/ETag receipt match. */
     fun load(context: Context): Result {
-        val cache = File(context.cacheDir, "vector_module_catalog_v1.json")
-        val fresh = runCatching { fetch() }
-        val text = fresh.getOrNull()
-        if (text != null) {
-            val parsed = runCatching { parse(text) }.getOrNull()
+        val cache = File(context.cacheDir, CACHE_FILE)
+        val metadata = File(context.cacheDir, META_FILE)
+        val savedText = cacheText(cache)
+        val savedModules = runCatching { savedText?.let(::parse) }.getOrNull()
+        val receipt = runCatching {
+            if (metadata.isFile && metadata.length() in 1L..1024L)
+                metadata.readText(Charsets.UTF_8) else null
+        }.getOrNull()
+        val validator = if (savedModules == null) null
+            else validatedCacheEtag(receipt, savedText)
+
+        val response = runCatching { fetch(validator) }.getOrNull()
+        if (response?.notModified == true && savedModules != null && validator != null)
+            return Result(savedModules, cached = false) // Online revalidated: no new body.
+        if (response?.body != null) {
+            val parsed = runCatching { parse(response.body) }.getOrNull()
             if (parsed != null) {
-                runCatching {
-                    val tmp = File(cache.parentFile, cache.name + ".tmp")
-                    tmp.writeText(text)
-                    check(tmp.renameTo(cache))
-                }
+                // Cache persistence is best-effort; verified network data is still usable.
+                runCatching { saveCache(cache, metadata, response.body, response.etag) }
                 return Result(parsed, cached = false)
             }
         }
-        val previous = cached(context)
-        if (previous != null) return previous.copy(
-            warning = "Offline · showing the last saved LSPosed catalog")
+        if (savedModules != null) return Result(savedModules, cached = true,
+            warning = "Could not refresh · showing the last saved LSPosed catalog")
         throw IOException("LSPosed catalog unavailable. Check your connection or Private DNS and retry.")
+    }
+
+    private fun saveCache(cache: File, metadata: File, body: String, etag: String?) {
+        val temp = File(cache.parentFile, cache.name + ".tmp")
+        val metaTemp = File(metadata.parentFile, metadata.name + ".tmp")
+        try {
+            temp.writeText(body, Charsets.UTF_8)
+            if (!temp.renameTo(cache)) throw IOException("Could not replace catalog cache")
+            // Sidecar is written AFTER successful cache replacement. Any stale
+            // sidecar is rejected automatically by validatedCacheEtag.
+            val receipt = cacheReceipt(body, etag)
+            if (receipt == null) metadata.delete()
+            else {
+                metaTemp.writeText(receipt, Charsets.UTF_8)
+                if (!metaTemp.renameTo(metadata)) throw IOException("Could not save ETag receipt")
+            }
+        } finally {
+            temp.delete()
+            metaTemp.delete()
+        }
     }
 
     fun filter(modules: List<Module>, query: String): List<Module> {
@@ -135,7 +209,7 @@ internal object VectorModuleCatalog {
         }
     }
 
-    private fun fetch(): String {
+    private fun fetch(etag: String?): Reply {
         val url = URL(LIST_URL)
         require(url.protocol == "https" && url.host == "backup.modules.lsposed.org")
         val connection = (url.openConnection() as HttpURLConnection).apply {
@@ -144,10 +218,16 @@ internal object VectorModuleCatalog {
             readTimeout = 12_000
             setRequestProperty("Accept", "application/json")
             setRequestProperty("User-Agent", "MMRL-LSPosed/0.1")
+            if (etag != null) setRequestProperty("If-None-Match", etag)
         }
         try {
-            if (connection.responseCode != 200)
-                throw IOException("LSPosed catalog returned HTTP ${connection.responseCode}")
+            val status = connection.responseCode
+            if (status == HttpURLConnection.HTTP_NOT_MODIFIED)
+                return Reply(null, null, notModified = true)
+            if (status != HttpURLConnection.HTTP_OK)
+                throw IOException("LSPosed catalog returned HTTP $status")
+            if (connection.contentLengthLong > MAX_BYTES)
+                throw IOException("LSPosed catalog too large")
             val buffer = ByteArray(8192)
             val content = ByteArrayOutputStream()
             connection.inputStream.use { stream ->
@@ -158,7 +238,8 @@ internal object VectorModuleCatalog {
                     content.write(buffer, 0, n)
                 }
             }
-            return content.toString("UTF-8")
+            return Reply(content.toString("UTF-8"), connection.getHeaderField("ETag"),
+                notModified = false)
         } finally { connection.disconnect() }
     }
 }
