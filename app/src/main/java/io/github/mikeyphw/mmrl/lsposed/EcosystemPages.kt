@@ -192,6 +192,7 @@ internal fun DownloadsPage(padding: PaddingValues) {
     var message by rememberSaveable { mutableStateOf("") }
     var saved by androidx.compose.runtime.remember { mutableStateOf<VerifiedDownload.Saved?>(null) }
     var history by remember { mutableStateOf<List<VerifiedDownload.Saved>?>(null) }
+    var currentAttemptOnly by rememberSaveable { mutableStateOf(true) }
     var saving by remember { mutableStateOf(false) }
     var cancelRequested by remember { mutableStateOf(false) }
     val cancelSignal = remember { AtomicBoolean(false) }
@@ -386,7 +387,8 @@ internal fun DownloadsPage(padding: PaddingValues) {
                             style = MaterialTheme.typography.bodySmall)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = {
-                                selectedRun = run; artifacts = null; busy = true; message = ""
+                                selectedRun = run; artifacts = null; currentAttemptOnly = true
+                                busy = true; message = ""
                                 coroutine.launch {
                                     withContext(Dispatchers.IO) { runCatching {
                                         GitHubEcosystem.runArtifacts(run, context.applicationContext)
@@ -409,18 +411,45 @@ internal fun DownloadsPage(padding: PaddingValues) {
                 item {
                     Text("Artifacts · run ${active.id} (current attempt ${active.attempt}; archives can predate reruns)",
                         style = MaterialTheme.typography.titleMedium)
+                    Text("GitHub metadata is not a Devtool receipt, APK signature, or verified archive. " +
+                        "Open the evidence on GitHub for independent review.",
+                        style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = currentAttemptOnly, onClick = { currentAttemptOnly = true },
+                            modifier = Modifier.testTag("ci_current_attempt"),
+                            label = { Text("Current attempt") })
+                        FilterChip(selected = !currentAttemptOnly, onClick = { currentAttemptOnly = false },
+                            modifier = Modifier.testTag("ci_all_attempts"),
+                            label = { Text("All artifacts") })
+                    }
                 }
-                if (artifacts != null && artifacts!!.isEmpty()) item { Text("No accessible artifacts in this run") }
-                items(artifacts.orEmpty(), key = { it.id }) { artifact ->
+                val visibleArtifacts = if (currentAttemptOnly)
+                    CiArtifactFederation.currentAttempt(active, artifacts.orEmpty())
+                    else artifacts.orEmpty()
+                if (artifacts != null && visibleArtifacts.isEmpty()) item {
+                    Text(if (currentAttemptOnly)
+                        "No artifacts with current-run and attempt-bound names. View all for older or unclassified entries."
+                        else "No accessible artifacts in this run")
+                }
+                items(visibleArtifacts, key = { it.id }) { artifact ->
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
                         Column(Modifier.fillMaxWidth().padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            val inspection = CiArtifactFederation.inspect(active, artifact)
                             Text(artifact.name, style = MaterialTheme.typography.titleSmall)
+                            Text(inspection.kind.label + " · " + when {
+                                !inspection.belongsToRun -> "Unclassified run/attempt name"
+                                !inspection.currentAttempt -> "Older attempt: inspect on GitHub"
+                                !inspection.eventCompatible -> "Event type not independently admitted"
+                                else -> "Run and current attempt name match"
+                            }, style = MaterialTheme.typography.bodySmall)
                             Text("Artifact ${artifact.id} · ${artifact.bytes / 1024} KiB · " +
                                 if (artifact.expired) "Expired" else "GitHub-hosted",
                                 style = MaterialTheme.typography.bodySmall)
-                            Text(artifact.digest?.let { "Archive digest ${it.take(23)}… (not an APK signature)" }
-                                ?: "No published archive digest", style = MaterialTheme.typography.labelSmall)
+                            Text(if (inspection.hasPublishedDigest)
+                                "GitHub-published archive SHA-256 (bytes NOT independently downloaded or checked)"
+                                else "No published archive digest; metadata only",
+                                style = MaterialTheme.typography.labelSmall)
                             OutlinedButton(onClick = {
                                 runCatching { openGitHub(context, artifact.url) }
                                     .onFailure { message = "No browser available" }

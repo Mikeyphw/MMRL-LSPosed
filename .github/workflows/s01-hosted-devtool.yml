@@ -201,6 +201,17 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      # R3A_FEDERATION_INDEX_BEGIN
+      - name: Publish Devtool federation index beside node verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci_federation.py \
+            --plan "$RUNNER_TEMP/s01-evidence/plan.json" \
+            --verification "$RUNNER_TEMP/s01-evidence/verification.json" \
+            --output "$RUNNER_TEMP/s01-evidence/federation-index.json"
+      # R3A_FEDERATION_INDEX_END
+
       - name: Publish source/graph verification evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
