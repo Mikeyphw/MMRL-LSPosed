@@ -1,3 +1,9 @@
+## R3C — Portable cross-consumer Devtool evidence contract (candidate; 2026-11-05)
+
+- Adds a fail-closed, stdlib-only producer/consumer verifier for the existing S01 Devtool plan, verification, and R3A federation-index receipts. GitHub Actions now publishes a fourth self-described JSON contract beside them, anchored to source SHA, run, attempt, graph, reviewed Devtool pin, APK digest and debug signer.
+- A separate consumer can verify a bounded four-member evidence ZIP against independently queried GitHub identity. No APK execution, automatic download, root, Vector mutation, signing, Devtool pin change or new secret.
+- **Not qualified until the new hosted CI and four-file artifact gate pass.** No independently signed provenance or release claims. See `docs/R3C_PORTABLE_DEVTOOL_FEDERATION.md`.
+
 ## R3B — Authenticated GitHub Actions ZIP custody (source candidate)
 
 - Adds user-initiated ZIP download with fresh run/attempt and artifact metadata checks,
