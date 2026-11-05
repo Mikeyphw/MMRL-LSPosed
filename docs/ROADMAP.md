@@ -279,3 +279,7 @@ S07 ─> S08 ─> [M2] ─> S09 ─> [M3] ─> S10 ─> [M4] ─> S11 ─> [M5]
 ---
 
 **Status at document creation:** Roadmap created. No GitHub repository, branch, CI workflow, APK or overlay was created or modified as part of producing this roadmap.
+
+## R4D-01 — supply-chain evidence groundwork (implementation candidate; not qualified)
+
+Adds `scripts/ci_r4d_supply_chain.py`, its read-only GitHub Actions workflow, CycloneDX partial resolved-runtime inventory, unverified third-party licensing register, exact source/run/attempt evidence digest manifest and deliberately `BLOCKED` report. No release admission or device acceptance is implied by passing CI. Remaining R4D tasks: independently attest the actual release candidate APK, verify protected Environment settings and authenticated release signer; add complete dependency/plugin and third-party license verification; API26 smoke, physical S11 and R4C restore/data evidence; independent gate with protected manual publication. See `docs/R4D_SUPPLY_CHAIN_AND_QUALIFICATION.md`.

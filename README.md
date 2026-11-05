@@ -26,3 +26,7 @@ S02: qualifying the first hosted APK and visual acceptance on device; S03–S07:
 ## Attribution
 
 This new implementation is GPL-3.0. Its Gradle wrapper is retrieved byte-for-byte from [Mikeyphw/MMRL](https://github.com/Mikeyphw/MMRL), itself derived from [MMRLApp/MMRL](https://github.com/MMRLApp/MMRL), at a pinned source commit. No original MMRL Kotlin application code is copied in S01; future code ports must keep source references and required notices. See `docs/UPSTREAM.md`.
+
+### R4D release-readiness boundary
+
+Read-only source-bound supply-chain inventory, partial CycloneDX BOM, license-audit debt and a fail-closed `BLOCKED` release report are documented in [R4D supply-chain and qualification](docs/R4D_SUPPLY_CHAIN_AND_QUALIFICATION.md). Neither the debug-signed builds nor the unqualified R4B candidate are authorized for production distribution. The release identity, physical-device acceptance and manual admission checks remain separate.
