@@ -212,6 +212,23 @@ jobs:
             --output "$RUNNER_TEMP/s01-evidence/federation-index.json"
       # R3A_FEDERATION_INDEX_END
 
+      # R3C_PORTABLE_CONTRACT_BEGIN
+      - name: Generate and independently recheck portable Devtool contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci_federation_portable.py generate \
+            --directory "$RUNNER_TEMP/s01-evidence"
+          python3 scripts/ci_federation_portable.py verify \
+            --directory "$RUNNER_TEMP/s01-evidence" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --attempt "$GITHUB_RUN_ATTEMPT" \
+            --event "$GITHUB_EVENT_NAME" \
+            --devtool-sha "b164463db51e2cffd12f753043b9e55a08cc43ae"
+      # R3C_PORTABLE_CONTRACT_END
+
       - name: Publish source/graph verification evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
