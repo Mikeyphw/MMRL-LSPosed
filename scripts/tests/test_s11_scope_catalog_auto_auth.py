@@ -42,7 +42,8 @@ class S11Contracts(unittest.TestCase):
         src=self.source('VectorModuleCatalog.kt')
         for marker in ('https://backup.modules.lsposed.org/modules.json',
             'MAX_BYTES = 6 * 1024 * 1024','rows.length() > 2500',
-            'parse(cache.readText())','row.optBoolean("hide")',
+            'val saved = cacheText(cache)','Result(parse(saved)',
+            'row.optBoolean("hide")',
             'releases.length() == 0', 'instanceFollowRedirects = false',
             '"Search LSPosed modules"'):
             if marker == '"Search LSPosed modules"':

@@ -1,3 +1,10 @@
+## R2A candidate — conditional Vector catalog caching (2026-11-05)
+
+- R1B screenshot-inspired Modules and local repository sorting merged via [PR #1](https://github.com/Mikeyphw/MMRL-LSPosed/pull/1), merge commit `9caef214d4f6770e1cc64d367cc3092633c5c0ae`. The PR workflow [42053252042](https://github.com/Mikeyphw/MMRL-LSPosed/actions/runs/42053252042) passed including the API 36 four-test non-root UI gate. Trusted merge-to-main signing/provenance still requires separate verification.
+- R2A adds an ETag/`If-None-Match` validator to the public Vector catalog, paired with an exact cache-body SHA-256 receipt. Untrusted or invalid metadata cannot authorize a conditional request; `304` requires a validated, already-parsed saved body. `200` must still parse and meet existing size/host limits before cache replacement.
+- Offline, DNS or HTTP failure retains the last valid local catalog. Search/sorting are still entirely local; networking remains user-driven, and no GitHub token or Vector write operation is involved.
+- R2A is a **source candidate**, not device/release qualified until hosted CI, new JVM cache tests and physical offline/online checks pass. See `docs/R2A_CONDITIONAL_CATALOG_CACHE.md`.
+
 ## R1B consolidated candidate — screenshot-inspired Modules and sortable Vector catalog (2026-11-04)
 
 - Supersedes the **unapplied R1A overlay** and retains its profile-aware Apps saved-scope index and tests.
