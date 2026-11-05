@@ -137,6 +137,41 @@ class EmulatorGateContracts(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'signer differs'):
                     ci.stage_pr(root/'stage2')
 
+    def test_pr_badging_allows_intervening_label_and_attribute_order(self):
+        # AGP/AAPT may add label or other attributes between runner and target.
+        cases = (
+            "instrumentation: name='androidx.test.runner.AndroidJUnitRunner' "
+            "label='Instrumentation tests' "
+            "targetPackage='io.github.mikeyphw.mmrl.lsposed.debug'",
+            "instrumentation: targetPackage='io.github.mikeyphw.mmrl.lsposed.debug' "
+            "functionalTest='0' name='androidx.test.runner.AndroidJUnitRunner' "
+            "label=''",
+        )
+        for line in cases:
+            with self.subTest(line=line), \
+                 patch.object(ci,'host_android_tool',return_value=Path('/mock/aapt')), \
+                 patch.object(ci,'run_checked',return_value=SimpleNamespace(stdout=(
+                     f"package: name='{ci.TEST_PACKAGE}' versionCode='1'\n{line}\n"))):
+                self.assertEqual(ci.package_badging(Path('test.apk')),
+                                 (ci.TEST_PACKAGE, ci.PACKAGE, ci.RUNNER))
+
+    def test_pr_badging_refuses_missing_duplicate_and_incomplete_entries(self):
+        invalid = (
+            "instrumentation: name='androidx.test.runner.AndroidJUnitRunner' label=''",
+            "instrumentation: name='androidx.test.runner.AndroidJUnitRunner' "
+            "name='other.runner' targetPackage='io.github.mikeyphw.mmrl.lsposed.debug'",
+            "instrumentation: name='androidx.test.runner.AndroidJUnitRunner' "
+            "targetPackage='io.github.mikeyphw.mmrl.lsposed.debug'\n"
+            "instrumentation: name='another.runner' targetPackage='other.pkg'",
+        )
+        for line in invalid:
+            with self.subTest(line=line), \
+                 patch.object(ci,'host_android_tool',return_value=Path('/mock/aapt')), \
+                 patch.object(ci,'run_checked',return_value=SimpleNamespace(stdout=(
+                     f"package: name='{ci.TEST_PACKAGE}' versionCode='1'\n{line}\n"))):
+                with self.assertRaisesRegex(ValueError,'instrumentation'):
+                    ci.package_badging(Path('test.apk'))
+
     def test_manifest_package_and_signer_extraction(self):
         sample=("package: name='io.github.mikeyphw.mmrl.lsposed.debug.test' versionCode='1'\n"
                 "instrumentation: name='androidx.test.runner.AndroidJUnitRunner' "

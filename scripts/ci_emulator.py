@@ -79,10 +79,24 @@ def package_badging(apk: Path) -> tuple[str, str | None, str | None]:
     match = re.search(r"(?m)^package: name='([^']+)'", out)
     if not match:
         raise ValueError('APK package manifest not readable')
-    instrumentation = re.search(
-        r"(?m)^instrumentation: name='([^']+)' targetPackage='([^']+)'", out)
-    return (match.group(1), instrumentation.group(2) if instrumentation else None,
-            instrumentation.group(1) if instrumentation else None)
+    # Android build tools can insert label or other attributes between the
+    # runner and targetPackage, or reorder those attributes entirely.
+    # Extract exactly one instrumentation entry and parse named attributes,
+    # never infer a target/runner from untrusted position-dependent text.
+    entries = re.findall(r"(?m)^instrumentation:\s+([^\r\n]+)$", out)
+    if not entries:
+        return match.group(1), None, None
+    if len(entries) != 1:
+        raise ValueError('Expected exactly one instrumentation manifest entry')
+    attributes = re.findall(
+        r"(?<!\S)([A-Za-z][A-Za-z0-9]*)='([^'\r\n]*)'", entries[0])
+    if len(attributes) != len({key for key, _ in attributes}):
+        raise ValueError('Duplicate instrumentation manifest attribute')
+    attrs = dict(attributes)
+    runner, target = attrs.get('name'), attrs.get('targetPackage')
+    if not runner or not target:
+        raise ValueError('Incomplete instrumentation runner/target manifest')
+    return match.group(1), target, runner
 
 
 def signing_certificate(apk: Path) -> str:
@@ -103,7 +117,9 @@ def stage_pr(directory: Path):
     test_pkg, test_target, test_runner = package_badging(test)
     if (app_pkg, app_target, app_runner) != (PACKAGE, None, None) or \
        (test_pkg, test_target, test_runner) != (TEST_PACKAGE, PACKAGE, RUNNER):
-        raise ValueError('PR APK manifest package/runner mismatch')
+        raise ValueError('PR APK manifest package/runner mismatch: '
+                         f'app={(app_pkg, app_target, app_runner)!r}; '
+                         f'test={(test_pkg, test_target, test_runner)!r}')
     certificate = signing_certificate(app)
     if signing_certificate(test) != certificate:
         raise ValueError('PR APK instrumentation signer differs from main APK')
