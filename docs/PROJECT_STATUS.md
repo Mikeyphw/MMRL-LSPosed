@@ -1,3 +1,16 @@
+## R3B — Authenticated GitHub Actions ZIP custody (source candidate)
+
+- Adds user-initiated ZIP download with fresh run/attempt and artifact metadata checks,
+  Android Keystore GitHub token confined to `api.github.com`, bounded storage-host
+  redirect, published ZIP SHA-256 and size check, and private receipt persistence.
+- Refuses stale attempts, missing digest, unsupported event, expired artifacts and
+  unsafe ZIP paths, duplicates, excessive entry sizes or invalid archives.
+- Saved ZIP is rehashed before use; optional extraction writes **only small text
+  evidence** into app-private storage. No APK extraction, installer, Vector root
+  operation or signing change. API-reported hash is NOT independent attestation.
+- Hosted Android/JVM/emulator and physical-network acceptance still pending.
+  See `docs/R3B_AUTHENTICATED_CI_ARCHIVES.md`.
+
 ## R3A Devtool federation and CI artifact evidence (candidate, 2026-11-05)
 
 - R2C remains PR-CI accepted; R3A must be applied only after R2C merges to `main`.
