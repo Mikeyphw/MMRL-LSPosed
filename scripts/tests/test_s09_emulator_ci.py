@@ -56,7 +56,7 @@ class EmulatorGateContracts(unittest.TestCase):
         src=(ROOT/'app/src/main/java/io/github/mikeyphw/mmrl/lsposed/MainActivity.kt').read_text()
         self.assertIn('Modifier.testTag("nav_${destination.name.lowercase()}")',src)
         self.assertIn('Modifier.testTag("vector_connect")',src)
-        self.assertIn('Modifier.weight(1f).testTag("module_search")',src)
+        self.assertIn('Modifier.fillMaxWidth().testTag("module_search")',src)
         self.assertIn('Modifier.testTag("open_settings")',src)
 
     def test_runner_rejects_false_junit_success(self):

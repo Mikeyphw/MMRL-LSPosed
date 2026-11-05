@@ -5,6 +5,8 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,6 +18,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -53,6 +57,8 @@ internal fun DiscoverPage(padding: PaddingValues) {
     val context = LocalContext.current
     val coroutine = rememberCoroutineScope()
     var term by rememberSaveable { mutableStateOf("") }
+    var ordering by rememberSaveable { mutableStateOf(VectorModuleCatalog.Sort.UPDATED_NEWEST) }
+    var sortMenuOpen by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var catalog by remember { mutableStateOf<VectorModuleCatalog.Result?>(null) }
     var message by remember { mutableStateOf("") }
@@ -79,7 +85,10 @@ internal fun DiscoverPage(padding: PaddingValues) {
         if (savedCatalog != null) catalog = savedCatalog
         load()
     }
-    val results = VectorModuleCatalog.filter(catalog?.modules.orEmpty(), term)
+    val results = remember(catalog, term, ordering) {
+        VectorModuleCatalog.sort(
+            VectorModuleCatalog.filter(catalog?.modules.orEmpty(), term), ordering)
+    }
     LazyColumn(Modifier.fillMaxSize().padding(padding),
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -96,15 +105,42 @@ internal fun DiscoverPage(padding: PaddingValues) {
                 singleLine = true, modifier = Modifier.fillMaxWidth().testTag("discover_query"))
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = { load() }, enabled = !busy,
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick = { load() }, enabled = !busy,
                     modifier = Modifier.testTag("discover_search")) {
                     Text(if (busy) "Loading…" else "Refresh catalog")
                 }
-                if (catalog != null) Text("${results.size} / ${catalog!!.modules.size} modules",
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 12.dp))
+                Box {
+                    OutlinedButton(onClick = { sortMenuOpen = true },
+                        modifier = Modifier.testTag("discover_sort")) {
+                        Text("Sort: " + when (ordering) {
+                            VectorModuleCatalog.Sort.UPDATED_NEWEST -> "Newest"
+                            VectorModuleCatalog.Sort.UPDATED_OLDEST -> "Oldest"
+                            VectorModuleCatalog.Sort.MOST_STARS -> "Most stars"
+                            VectorModuleCatalog.Sort.FEWEST_STARS -> "Fewest stars"
+                            VectorModuleCatalog.Sort.NAME_AZ -> "Name A–Z"
+                            VectorModuleCatalog.Sort.NAME_ZA -> "Name Z–A"
+                        })
+                    }
+                    DropdownMenu(expanded = sortMenuOpen, onDismissRequest = { sortMenuOpen = false }) {
+                        VectorModuleCatalog.Sort.entries.forEach { sort ->
+                            DropdownMenuItem(text = { Text(when (sort) {
+                                VectorModuleCatalog.Sort.UPDATED_NEWEST -> "Recently updated"
+                                VectorModuleCatalog.Sort.UPDATED_OLDEST -> "Oldest updates"
+                                VectorModuleCatalog.Sort.MOST_STARS -> "Most stars"
+                                VectorModuleCatalog.Sort.FEWEST_STARS -> "Fewest stars"
+                                VectorModuleCatalog.Sort.NAME_AZ -> "Name A–Z"
+                                VectorModuleCatalog.Sort.NAME_ZA -> "Name Z–A"
+                            }) }, onClick = { ordering = sort; sortMenuOpen = false },
+                                modifier = Modifier.testTag("discover_sort_${sort.name.lowercase()}"))
+                        }
+                    }
+                }
             }
+            if (catalog != null) Text("${results.size} of ${catalog!!.modules.size} modules · sorted locally",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp))
         }
         val active = catalog
         if (active != null && active.cached) item {

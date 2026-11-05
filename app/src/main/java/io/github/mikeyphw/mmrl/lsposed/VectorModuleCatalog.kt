@@ -7,6 +7,12 @@ import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.YearMonth
+import java.time.ZoneOffset
 
 /**
  * LSPosed module catalog used by Vector itself, not arbitrary GitHub topic search.
@@ -30,6 +36,41 @@ internal object VectorModuleCatalog {
     )
     data class Result(val modules: List<Module>, val cached: Boolean, val warning: String = "")
 
+    enum class Sort { UPDATED_NEWEST, UPDATED_OLDEST, MOST_STARS, FEWEST_STARS, NAME_AZ, NAME_ZA }
+
+    /** Catalog metadata is mostly UTC ISO-8601; handle offsets and partial legacy dates.
+     * Missing/malformed timestamps always sort last in either direction. */
+    private fun releaseMillis(value: String): Long? {
+        val raw = value.trim()
+        if (raw.isEmpty()) return null
+        return runCatching { Instant.parse(raw).toEpochMilli() }.getOrNull()
+            ?: runCatching { OffsetDateTime.parse(raw).toInstant().toEpochMilli() }.getOrNull()
+            ?: runCatching { LocalDateTime.parse(raw).toInstant(ZoneOffset.UTC).toEpochMilli() }.getOrNull()
+            ?: runCatching { LocalDate.parse(raw).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() }.getOrNull()
+            ?: runCatching { YearMonth.parse(raw).atDay(1).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() }.getOrNull()
+    }
+
+    /** Pure, deterministic ordering. Works with cached catalog data and makes no network calls. */
+    fun sort(modules: List<Module>, by: Sort): List<Module> {
+        val name = compareBy<Module> { it.title.lowercase(java.util.Locale.ROOT) }
+            .thenBy { it.packageName }
+        // Parse timestamps only once per row; sorting 1,000+ modules stays cheap.
+        val releaseTimes = if (by == Sort.UPDATED_NEWEST || by == Sort.UPDATED_OLDEST)
+            modules.associateWith { releaseMillis(it.updated) } else emptyMap()
+        val ordered = when (by) {
+            Sort.UPDATED_NEWEST -> compareBy<Module> { releaseTimes[it] == null }
+                .thenByDescending { releaseTimes[it] ?: Long.MIN_VALUE }.then(name)
+            Sort.UPDATED_OLDEST -> compareBy<Module> { releaseTimes[it] == null }
+                .thenBy { releaseTimes[it] ?: Long.MAX_VALUE }.then(name)
+            Sort.MOST_STARS -> compareByDescending<Module> { it.stars }.then(name)
+            Sort.FEWEST_STARS -> compareBy<Module> { it.stars }.then(name)
+            Sort.NAME_AZ -> name
+            Sort.NAME_ZA -> compareByDescending<Module> { it.title.lowercase(java.util.Locale.ROOT) }
+                .thenBy { it.packageName }
+        }
+        return modules.sortedWith(ordered)
+    }
+
     fun parse(data: String): List<Module> {
         val rows = JSONArray(data)
         if (rows.length() > 2500) throw IOException("Catalog exceeds expected module count")
@@ -38,9 +79,9 @@ internal object VectorModuleCatalog {
         for (i in 0 until rows.length()) {
             val row = rows.optJSONObject(i) ?: continue
             val name = row.optString("name")
-            if (!PACKAGE.matches(name) || !seen.add(name) || row.optBoolean("hide")) continue
+            if (!PACKAGE.matches(name) || row.optBoolean("hide")) continue
             val releases = row.optJSONArray("releases")
-            if (releases == null || releases.length() == 0) continue
+            if (releases == null || releases.length() == 0 || !seen.add(name)) continue
             val version = row.optString("latestRelease").take(65)
             modules.add(Module(
                 packageName = name,
@@ -53,7 +94,7 @@ internal object VectorModuleCatalog {
             ))
         }
         if (modules.isEmpty()) throw IOException("The module catalog contains no usable entries")
-        return modules.sortedWith(compareByDescending<Module> { it.updated }.thenBy { it.title.lowercase() })
+        return sort(modules, Sort.UPDATED_NEWEST)
     }
 
     /** Serve the last valid catalog immediately, before attempting DNS/network. */
