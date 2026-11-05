@@ -1,3 +1,10 @@
+## R2C — source-bound release downloads (candidate, November 5, 2026)
+
+- Based on merged R2B `main` `5e7e14526e768b9d7e481ff8c7cb73191aa5fb98`.
+- Exact first-party GitHub release/tag/asset URL binding and v2 downloaded-file receipts; existing two-field receipts stay accessible but marked legacy hash-only.
+- File hash/receipt revalidation before external viewer handoff; no APK signing/provenance or automatic install claims. No root/Vector, signing, Devtool or CI workflow changes.
+- **Not accepted until hosted Android/Devtool/JVM/lint/API36 CI and physical UX checks pass.** See `docs/R2C_RELEASE_DOWNLOAD_IDENTITY.md`.
+
 ## R2A candidate — conditional Vector catalog caching (2026-11-05)
 
 - R1B screenshot-inspired Modules and local repository sorting merged via [PR #1](https://github.com/Mikeyphw/MMRL-LSPosed/pull/1), merge commit `9caef214d4f6770e1cc64d367cc3092633c5c0ae`. The PR workflow [42053252042](https://github.com/Mikeyphw/MMRL-LSPosed/actions/runs/42053252042) passed including the API 36 four-test non-root UI gate. Trusted merge-to-main signing/provenance still requires separate verification.

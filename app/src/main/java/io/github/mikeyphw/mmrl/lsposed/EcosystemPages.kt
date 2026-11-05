@@ -42,7 +42,6 @@ import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 private fun openGitHub(context: Context, link: String) {
@@ -191,7 +190,7 @@ internal fun DownloadsPage(padding: PaddingValues) {
     var selectedRun by remember { mutableStateOf<GitHubEcosystem.Run?>(null) }
     var artifacts by remember { mutableStateOf<List<GitHubEcosystem.Artifact>?>(null) }
     var message by rememberSaveable { mutableStateOf("") }
-    var saved by androidx.compose.runtime.remember { mutableStateOf<File?>(null) }
+    var saved by androidx.compose.runtime.remember { mutableStateOf<VerifiedDownload.Saved?>(null) }
     var history by remember { mutableStateOf<List<VerifiedDownload.Saved>?>(null) }
     var saving by remember { mutableStateOf(false) }
     var cancelRequested by remember { mutableStateOf(false) }
@@ -274,26 +273,46 @@ internal fun DownloadsPage(padding: PaddingValues) {
                         verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(entry.file.name, style = MaterialTheme.typography.titleSmall)
                         Text("SHA-256 ${entry.sha256.take(18)}…", style = MaterialTheme.typography.bodySmall)
-                        OutlinedButton(onClick = { saved = entry.file }) { Text("Select verified file") }
+                        Text(entry.releaseTag?.let { "GitHub release $it · source metadata bound" }
+                            ?: "Legacy hash-only receipt · source not recorded",
+                            style = MaterialTheme.typography.labelSmall)
+                        OutlinedButton(onClick = { saved = entry }) { Text("Select verified file") }
                     }
                 }
             }
         }
         if (saved != null) item {
-            Text("Verified file saved in private app storage: ${saved!!.name}")
+            Text("SHA-256 checked file in private storage: ${saved!!.file.name}")
+            Text("APK package and signing certificate are NOT qualified. " +
+                "Check publisher and installer identity before accepting installation.",
+                style = MaterialTheme.typography.bodySmall)
             OutlinedButton(onClick = {
-                runCatching {
-                    val file = saved ?: return@runCatching
-                    val uri = FileProvider.getUriForFile(context,
-                        "${context.packageName}.verified-files", file)
-                    val type = if (file.name.endsWith(".apk", true))
-                        "application/vnd.android.package-archive" else "application/zip"
-                    context.startActivity(Intent(Intent.ACTION_VIEW).apply {
-                        setDataAndType(uri, type)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-                    })
-                }.onFailure { message = "No compatible file viewer installed" }
-            }) { Text("Open verified file") }
+                val selected = saved ?: return@OutlinedButton
+                if (busy) return@OutlinedButton
+                busy = true
+                coroutine.launch {
+                    val stillValid = withContext(Dispatchers.IO) { runCatching {
+                        VerifiedDownload.recheckSaved(context.applicationContext, selected)
+                    }.getOrDefault(false) }
+                    if (!stillValid) {
+                        saved = null
+                        message = "Saved file or receipt changed. Reload My verified files."
+                    } else {
+                        runCatching {
+                            val file = selected.file
+                            val uri = FileProvider.getUriForFile(context,
+                                "${context.packageName}.verified-files", file)
+                            val type = if (file.name.endsWith(".apk", true))
+                                "application/vnd.android.package-archive" else "application/zip"
+                            context.startActivity(Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(uri, type)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                            })
+                        }.onFailure { message = "No compatible file viewer installed" }
+                    }
+                    busy = false
+                }
+            }, enabled = !busy) { Text("Open SHA-256 checked file") }
         }
         if (tab == 0) {
             val entries = releases
@@ -314,7 +333,7 @@ internal fun DownloadsPage(padding: PaddingValues) {
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text("${asset.name} · ${asset.size / 1024} KiB", style = MaterialTheme.typography.bodyMedium)
                                 Text(if (asset.verifiedDownloadable)
-                                    "Published SHA-256: ${asset.digest?.removePrefix("sha256:")?.take(16)}…"
+                                    "GitHub-published SHA-256: ${asset.digest?.removePrefix("sha256:")?.take(16)}… · signer not checked"
                                     else "No verifiable SHA-256 or unsupported file; browser only",
                                     style = MaterialTheme.typography.labelSmall)
                                 if (asset.verifiedDownloadable) {
@@ -335,7 +354,11 @@ internal fun DownloadsPage(padding: PaddingValues) {
                                                         }
                                                     })
                                             } }
-                                            outcome.onSuccess { saved = it; message = "Verified SHA-256" }
+                                            outcome.onSuccess { file ->
+                                                saved = VerifiedDownload.Saved(file,
+                                                    asset.digest!!.removePrefix("sha256:"), asset.releaseTag)
+                                                message = "Verified SHA-256 and GitHub release path; signer NOT verified"
+                                            }
                                                 .onFailure { message = it.message?.take(180) ?: "Download failed" }
                                             saving = false; busy = false
                                         }
