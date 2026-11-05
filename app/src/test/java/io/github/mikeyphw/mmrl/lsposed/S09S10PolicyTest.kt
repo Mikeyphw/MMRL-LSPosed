@@ -114,14 +114,14 @@ class S09S10PolicyTest {
 
     @Test fun hashIsRequiredBeforeDownloadBecomesAvailable() {
         val url = "https://github.com/Mikeyphw/MMRL-LSPosed/releases/download/v1/app.apk"
-        assertTrue(GitHubEcosystem.Asset("app.apk", 4096, "sha256:" + "a".repeat(64), url)
+        assertTrue(GitHubEcosystem.Asset("app.apk", 4096, "sha256:" + "a".repeat(64), url, "v1")
             .verifiedDownloadable)
-        assertFalse(GitHubEcosystem.Asset("app.apk", 4096, null, url).verifiedDownloadable)
-        assertFalse(GitHubEcosystem.Asset("app.apk", 4096, "sha256:" + "x".repeat(64), url)
+        assertFalse(GitHubEcosystem.Asset("app.apk", 4096, null, url, "v1").verifiedDownloadable)
+        assertFalse(GitHubEcosystem.Asset("app.apk", 4096, "sha256:" + "x".repeat(64), url, "v1")
             .verifiedDownloadable)
-        assertFalse(GitHubEcosystem.Asset("app.apk", 200_000_000, "sha256:" + "a".repeat(64), url)
+        assertFalse(GitHubEcosystem.Asset("app.apk", 200_000_000, "sha256:" + "a".repeat(64), url, "v1")
             .verifiedDownloadable)
-        assertFalse(GitHubEcosystem.Asset("app.sh", 4096, "sha256:" + "a".repeat(64), url)
+        assertFalse(GitHubEcosystem.Asset("app.sh", 4096, "sha256:" + "a".repeat(64), url, "v1")
             .verifiedDownloadable)
     }
 }

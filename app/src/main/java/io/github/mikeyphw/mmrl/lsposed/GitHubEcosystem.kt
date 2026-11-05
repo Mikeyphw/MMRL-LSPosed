@@ -21,10 +21,12 @@ internal object GitHubEcosystem {
     private val digestFormat = Regex("sha256:[a-f0-9]{64}")
 
     data class Repository(val fullName: String, val description: String, val stars: Int)
-    data class Asset(val name: String, val size: Long, val digest: String?, val url: String) {
+    data class Asset(val name: String, val size: Long, val digest: String?,
+                     val url: String, val releaseTag: String = "") {
+        /** Repository/tag/filename/URL binding plus digest; NOT an APK signing claim. */
         val verifiedDownloadable: Boolean get() = size in 1..MAX_RELEASE_FILE &&
             digest != null && digestFormat.matches(digest) &&
-            (name.endsWith(".apk", true) || name.endsWith(".zip", true)) &&
+            ReleaseIdentityPolicy.asset(releaseTag, name, url) &&
             VerifiedDownload.allowedSourceUrl(url) && VerifiedDownload.allowedName(name)
     }
     data class Release(val name: String, val tag: String, val htmlUrl: String, val assets: List<Asset>)
@@ -61,9 +63,10 @@ internal object GitHubEcosystem {
             val release = items.optJSONObject(i) ?: return@mapNotNull null
             if (release.optBoolean("draft") || release.optBoolean("prerelease")) return@mapNotNull null
             val link = release.optString("html_url")
-            if (!link.startsWith("https://github.com/$REPOSITORY/releases/")) return@mapNotNull null
+            val tag = release.optString("tag_name").take(80)
+            if (!ReleaseIdentityPolicy.releasePage(tag, link)) return@mapNotNull null
             val assets = release.optJSONArray("assets") ?: JSONArray()
-            Release(release.optString("name").take(100), release.optString("tag_name").take(80),
+            Release(release.optString("name").take(100), tag,
                 link, (0 until minOf(assets.length(), 30)).mapNotNull { j ->
                     val a = assets.optJSONObject(j) ?: return@mapNotNull null
                     val file = a.optString("name").take(150)
@@ -72,7 +75,7 @@ internal object GitHubEcosystem {
                     val url = a.optString("browser_download_url")
                     if (file.isBlank() || size !in 1..MAX_RELEASE_FILE ||
                         !VerifiedDownload.allowedSourceUrl(url)) return@mapNotNull null
-                    Asset(file, size, rawDigest, url)
+                    Asset(file, size, rawDigest, url, tag)
                 })
         }
     }
