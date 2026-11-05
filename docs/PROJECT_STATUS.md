@@ -87,3 +87,11 @@ no authenticated in-app CI archive downloading or APK signer qualification yet.
 S11: release hardening and independent release signing qualification.
 
 Devtool federation coordination continues separately without rewriting MMRL's main fork.
+
+## R2B candidate — conservative catalog-vs-installed version hints (2026-11-05)
+
+- Depends on R2A PR #2 and its successful hosted PR run `42071031874`.
+- Implemented source candidate: cached catalog only, strict numeric comparison of installed package versions against the corresponding public Vector catalog entry, safe newer-version hints, and contextual module-detail information.
+- **No update-install, publisher-verification or runtime-hook claim.** Numeric comparison is not proof of APK signing continuity, compatibility or trust. Unclear/prerelease tags require manual review.
+- Root APIs, write journal, signing and GitHub Actions workflows remain untouched.
+- Physical-device R2B UX, hosted CI and trusted-main signing are **not yet qualified**. See `docs/R2B_CONSERVATIVE_MODULE_VERSION_COMPARISON.md`.

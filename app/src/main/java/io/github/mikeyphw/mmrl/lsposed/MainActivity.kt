@@ -148,6 +148,8 @@ private fun StandaloneApp() {
         }
         var selectedModule by session::selectedModule
         var candidates by remember { mutableStateOf<List<ModuleDiscovery.Candidate>?>(null) }
+        // Public cached catalog only. No network request or privileged operation on Modules.
+        var modulesCatalog by remember { mutableStateOf<VectorModuleCatalog.Result?>(null) }
         var discoveryError by remember { mutableStateOf(false) }
         var refreshKey by remember { mutableIntStateOf(0) }
         var vectorRefresh by remember { mutableIntStateOf(0) }
@@ -180,6 +182,13 @@ private fun StandaloneApp() {
                 runCatching { ModuleDiscovery.scan(context.applicationContext) }
             }
             result.onSuccess { candidates = it }.onFailure { discoveryError = true; candidates = null }
+        }
+        LaunchedEffect(section, refreshKey) {
+            if (section == Section.MODULES) {
+                modulesCatalog = withContext(Dispatchers.IO) {
+                    VectorModuleCatalog.cached(context.applicationContext)
+                }
+            }
         }
         LaunchedEffect(appsRequest) {
             if (appsRequest == 0) return@LaunchedEffect
@@ -266,6 +275,12 @@ private fun StandaloneApp() {
                 selectedModule != null -> {
                     val currentModule = selectedModule!!
                     ModuleDetailPage(currentModule, vector, scopeCounts, innerPadding,
+                        catalogAssessment = ModuleVersionIndex.assess(
+                            currentModule.versionName,
+                            modulesCatalog?.modules?.firstOrNull {
+                                it.packageName == currentModule.packageName
+                            }?.version),
+                        catalogAvailable = modulesCatalog != null,
                         onScope = { scope = ScopeState.Idle; scopeOpen = true; scopeRequest++ },
                         onWriteBusy = { session.writeBusy = it },
                         onCommitted = { result ->
@@ -284,6 +299,7 @@ private fun StandaloneApp() {
                 })
                 section == Section.MODULES -> ModuleListPage(
                     combined, discoveryError, vector, scopeCounts, innerPadding,
+                    modulesCatalog?.modules,
                     onRefresh = { candidates = null; refreshKey++;
                         if (vector is VectorState.Ready) vectorRefresh++ },
                     onDiscover = { section = Section.DISCOVER },
@@ -462,6 +478,7 @@ private fun ModuleListPage(
     vector: VectorState,
     scopeCounts: Map<String, Int>,
     padding: PaddingValues,
+    catalog: List<VectorModuleCatalog.Module>?,
     onRefresh: () -> Unit,
     onDiscover: () -> Unit,
     onSettings: () -> Unit,
@@ -479,6 +496,13 @@ private fun ModuleListPage(
         ModuleListModel.groups(candidates.orEmpty(), savedFlags, query, format, status, order)
     }
     val shown = groups.sumOf { it.modules.size }
+    val versions = remember(candidates, catalog) {
+        ModuleVersionIndex.forInstalled(candidates.orEmpty().filter {
+            it.format != ModuleDiscovery.Format.UNKNOWN
+        }, catalog)
+    }
+    val newerCount = ModuleVersionIndex.newerCount(versions)
+    val comparedCount = ModuleVersionIndex.comparableCount(versions)
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(padding),
@@ -540,8 +564,13 @@ private fun ModuleListPage(
                     Icon(painterResource(R.drawable.ic_discover), contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary)
                     Column(Modifier.weight(1f)) {
-                        Text("Browse updates in the repository", style = MaterialTheme.typography.titleSmall)
-                        Text("Compare community releases in Discover",
+                        Text(if (newerCount > 0)
+                            "$newerCount newer catalog version${if (newerCount == 1) "" else "s"}"
+                            else "Browse updates in the repository",
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.testTag("modules_updates_summary"))
+                        Text(if (catalog == null) "Open Discover to save a catalog for comparison"
+                            else "$comparedCount comparable installed versions · publisher and APK signature not verified",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -637,6 +666,7 @@ private fun ModuleListPage(
                 }
                 items(group.modules, key = { "module_${it.packageName}" }) { module ->
                     val stored = saved?.get(module.packageName)
+                    val versionAssessment = versions[module.packageName]
                     Column(Modifier.fillMaxWidth().clickable { onOpen(module) }
                         .testTag("module_row_${module.packageName}")
                         .padding(top = 6.dp, bottom = 12.dp),
@@ -676,6 +706,18 @@ private fun ModuleListPage(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                 }
+                                if (versionAssessment?.verdict == ModuleVersionIndex.Verdict.NEWER_IN_CATALOG) {
+                                    Text("Newer catalog version: ${versionAssessment.catalogVersion} · verify publisher and signing",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.tertiary,
+                                        modifier = Modifier.testTag("module_catalog_newer_${module.packageName}"),
+                                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                } else if (versionAssessment?.verdict == ModuleVersionIndex.Verdict.NEEDS_MANUAL_REVIEW) {
+                                    Text("Catalog version differs or is nonnumeric · compare manually",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2)
+                                }
                                 if (module.format == ModuleDiscovery.Format.UNKNOWN) Text(
                                     "APK not detected · Vector entry only",
                                     style = MaterialTheme.typography.labelSmall,
@@ -696,7 +738,9 @@ private fun ModuleListPage(
 
 @Composable
 private fun ModuleDetailPage(candidate: ModuleDiscovery.Candidate, vector: VectorState,
-    scopeCounts: Map<String, Int>, padding: PaddingValues, onScope: () -> Unit,
+    scopeCounts: Map<String, Int>, padding: PaddingValues,
+    catalogAssessment: ModuleVersionIndex.Assessment, catalogAvailable: Boolean,
+    onScope: () -> Unit,
     onCommitted: (VectorMutation.Outcome) -> Unit,
     onWriteBusy: (Boolean) -> Unit) {
     val context = LocalContext.current
@@ -765,6 +809,21 @@ private fun ModuleDetailPage(candidate: ModuleDiscovery.Candidate, vector: Vecto
             DetailLine(stringResource(R.string.package_name), candidate.packageName)
             DetailLine(stringResource(R.string.module_format), formatLabel(candidate.format))
             DetailLine("APK version", candidate.versionName.ifBlank { "Unknown" })
+            if (catalogAvailable) {
+                when (catalogAssessment.verdict) {
+                    ModuleVersionIndex.Verdict.NEWER_IN_CATALOG ->
+                        DetailLine("Public catalog", "Newer ${catalogAssessment.catalogVersion} · verify publisher, signing and compatibility")
+                    ModuleVersionIndex.Verdict.SAME_VERSION ->
+                        DetailLine("Public catalog", "Same numeric version · signing not verified")
+                    ModuleVersionIndex.Verdict.INSTALLED_NEWER ->
+                        DetailLine("Public catalog", "Installed numeric version is newer")
+                    ModuleVersionIndex.Verdict.NEEDS_MANUAL_REVIEW ->
+                        DetailLine("Public catalog", "Version comparison requires manual review")
+                    ModuleVersionIndex.Verdict.VERSION_UNKNOWN ->
+                        DetailLine("Public catalog", "Cannot compare missing version data")
+                    else -> Unit
+                }
+            }
             if (candidate.minApiVersion > 0) DetailLine("Minimum Xposed API",
                 candidate.minApiVersion.toString())
             if (candidate.targetApiVersion > 0) DetailLine("Target Xposed API",
