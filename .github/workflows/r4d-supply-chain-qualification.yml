@@ -1,0 +1,117 @@
+name: R4D Read-only Supply Chain and Qualification (Never Publish)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r4d-supply-chain-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  source-inventory:
+    name: Resolve runtime dependencies and emit BLOCKED release decision
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact event source without credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Run offline release-boundary contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -m unittest discover -s scripts/tests -q
+      - name: Set up Java 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Set up Android SDK (hosted only)
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          cmdline-tools-version: 15859902
+          packages: 'platforms;android-36 build-tools;36.0.0 platform-tools'
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        with:
+          validate-wrappers: true
+      - name: Resolve hosted releaseRuntimeClasspath only (no APK build/sign)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --console=plain :app:dependencies \
+            --configuration releaseRuntimeClasspath > "$RUNNER_TEMP/r4d-gradle.txt"
+      - name: Create immutable source/run/attempt-bound inventory and qualification denial
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci_r4d_supply_chain.py generate \
+            --root "$GITHUB_WORKSPACE" --gradle-report "$RUNNER_TEMP/r4d-gradle.txt" \
+            --out "$RUNNER_TEMP/r4d-inventory" \
+            --source "$GITHUB_SHA" --run "$GITHUB_RUN_ID" \
+            --attempt "$GITHUB_RUN_ATTEMPT" --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF"
+          python3 scripts/ci_r4d_supply_chain.py verify \
+            --root "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/r4d-inventory" \
+            --source "$GITHUB_SHA" --run "$GITHUB_RUN_ID" \
+            --attempt "$GITHUB_RUN_ATTEMPT" --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF"
+      - name: Publish evidence only (never signed APK or production secrets)
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mmrl-lsposed-r4d-inventory-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/r4d-inventory/
+          if-no-files-found: error
+          retention-days: 14
+
+  attest-inventory-only:
+    name: Attest SBOM inventory on trusted main (NOT an APK)
+    needs: [source-inventory]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Checkout source-pinned verifier
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Download exactly same-run inventory
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mmrl-lsposed-r4d-inventory-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/r4d-downloaded
+      - name: Independently verify source manifest, BOM, hashes and blocked outcome
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 scripts/ci_r4d_supply_chain.py verify \
+            --root "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/r4d-downloaded" \
+            --source "$GITHUB_SHA" --run "$GITHUB_RUN_ID" \
+            --attempt "$GITHUB_RUN_ATTEMPT" --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF"
+      - name: Attest source-bound SBOM (not release qualification)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ runner.temp }}/r4d-downloaded/sbom.cdx.json
