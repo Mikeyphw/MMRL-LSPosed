@@ -139,3 +139,18 @@ Devtool federation coordination continues separately without rewriting MMRL's ma
 - **No update-install, publisher-verification or runtime-hook claim.** Numeric comparison is not proof of APK signing continuity, compatibility or trust. Unclear/prerelease tags require manual review.
 - Root APIs, write journal, signing and GitHub Actions workflows remain untouched.
 - Physical-device R2B UX, hosted CI and trusted-main signing are **not yet qualified**. See `docs/R2B_CONSERVATIVE_MODULE_VERSION_COMPARISON.md`.
+
+## R4C candidate — source-bound, operator-controlled upgrade/rollback trial (2026-11-05)
+
+- Depends on merged R4B signing-isolation policy and a **separately enrolled, non-debug
+  production certificate**. Enrollment is still pending; no release-candidate/device
+  qualification may be inferred from these source tests.
+- Local `scripts/ci_device_acceptance.py` revalidates exact candidate-source signing
+  policy, run/attempt, APK bytes/signature, package, candidate receipt, and a known
+  installed production-signed baseline before a read-only device plan is written.
+- Trial installation and optional restoration have **separate explicit opt-in flags**,
+  exclusive journals, installed APK readback and no uninstall, data clear, root, Vector
+  or automatic publishing. Android downgrade and app-data restoration are not guaranteed.
+- Manual main-only R4C workflow runs source contracts with fake APK/mock ADB; it does
+  **not** install packages. Hosted native Android CI and independent physical evidence
+  are separate gates. See `docs/R4C_DEVICE_ACCEPTANCE.md`.
