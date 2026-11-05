@@ -1,0 +1,33 @@
+name: R4C Read-only Device Acceptance Contract (No APK Installation)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-contract:
+    name: R4C standalone source-policy and mock ADB acceptance tests
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact main source without persisted credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify source and execute deterministic read-only contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'Mikeyphw/MMRL-LSPosed'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -q
+          python3 scripts/ci_device_acceptance.py --help >/dev/null
+          echo R4C_READONLY_SOURCE_CONTRACT_PASS_NOT_DEVICE_QUALIFIED
