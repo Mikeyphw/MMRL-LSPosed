@@ -17,6 +17,7 @@ internal object LocalSettings {
     private const val PREFS = "lsposed_local_settings_v1"
     private const val TOKEN_DATA = "github_token_sealed"
     private const val AUTO_CONNECT = "auto_connect_vector"
+    private const val APPEARANCE = "appearance_preference"
     private const val ALIAS = "mmrl_lsposed_github_token_v1"
 
     fun autoConnect(context: Context): Boolean =
@@ -25,6 +26,20 @@ internal object LocalSettings {
     fun setAutoConnect(context: Context, enabled: Boolean) {
         check(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putBoolean(AUTO_CONNECT, enabled).commit())
+    }
+
+    /** Ordinary local UI preference; never contains a token or privileged state. */
+    fun appearance(context: Context): String {
+        val stored = runCatching {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(APPEARANCE, null)
+        }.getOrNull()
+        return AppearancePreference.canonical(stored)
+    }
+
+    fun setAppearance(context: Context, value: String) {
+        require(AppearancePreference.canonical(value) == value) { "Invalid appearance choice" }
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(APPEARANCE, value).apply()
     }
 
     /** CI emulator is deliberately unprivileged; physical-device read is opt-out. */
