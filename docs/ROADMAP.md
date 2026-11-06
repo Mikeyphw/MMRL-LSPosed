@@ -287,3 +287,9 @@ Adds `scripts/ci_r4d_supply_chain.py`, its read-only GitHub Actions workflow, Cy
 ## R5 — application-first refinement (after merged R4D-01)
 
 Defer R4D-02 and later multi-scope SBOM/provenance infrastructure. Maintain existing security boundaries without inventing new release gates. R5A (this source candidate) improves Modules list/detail presentation and preserves guarded writes. After hosted R5A checks and real-phone visual review: R5B scope-editor usability, R5C Discover/Downloads, and R5D device polish. Keep Vector, Kotlin app, CI and security foundations separate from nonessential enterprise supply-chain work.
+
+## R5B — Scope Editor UX refinement (source candidate, 2026-11-05)
+
+- The saved-scope editor now shows counts for all/selected/suggested targets, tokenized local search across labels and packages, a clear/reset affordance, and better empty states. Read-only targets remain visually distinguished; a failed saved-scope read offers an explicit user-tap retry.
+- Existing immediate, one-at-a-time journaled Vector writes, fresh pre-state, read-back verification and disabled-module enable protection remain unchanged. No root call on Compose rendering, no bulk scope write, and no automatic retry after unknown mutation outcome.
+- Python/JVM tests and GitHub Actions API36 emulator build are required; real-device scope browsing and visual acceptance remain separate. No changes to production signing.
