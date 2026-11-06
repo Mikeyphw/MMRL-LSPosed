@@ -3,6 +3,8 @@ package io.github.mikeyphw.mmrl.lsposed
 import android.content.pm.ApplicationInfo
 import android.widget.ImageView
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -24,6 +26,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,6 +42,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import java.util.Locale
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -72,6 +76,7 @@ internal fun ScopeDraftPage(
     enabled: Boolean?,
     onCommitted: (VectorMutation.Outcome) -> Unit,
     onWriteBusy: (Boolean) -> Unit,
+    onRetryRead: () -> Unit,
 ) {
     val context = LocalContext.current
     val coroutine = rememberCoroutineScope()
@@ -92,7 +97,7 @@ internal fun ScopeDraftPage(
                     AppTarget(app.packageName, label.ifBlank { app.packageName },
                         (app.flags and (ApplicationInfo.FLAG_SYSTEM or
                             ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0)
-                }.sortedBy { it.label.lowercase() }
+                }.sortedBy { it.label.lowercase(Locale.ROOT) }
             }
         }
         installed = result.getOrNull()
@@ -101,7 +106,7 @@ internal fun ScopeDraftPage(
 
     when (state) {
         ScopeState.Idle, ScopeState.Loading -> ScopeInfo(padding, "Loading saved Vector scopes…")
-        is ScopeState.Unavailable -> ScopeInfo(padding, "Scope unavailable: ${state.reason}")
+        is ScopeState.Unavailable -> ScopeInfo(padding, "Scope unavailable: ${state.reason}", onRetryRead)
         is ScopeState.Ready -> {
             val baseline = remember(module.packageName, state.entries) { state.entries.map { it.key }.toSet() }
             val recommended = remember(module.packageName, module.declaredScopes) { module.declaredScopes.toSet() }
@@ -143,23 +148,32 @@ internal fun ScopeDraftPage(
                 .map { AppTarget(it, it, system = true, savedOnly = true) }
             val targets = (installed.orEmpty() + configured + suggestions)
                 .distinctBy { "${it.packageName}/${it.userId}" }
-            val visible = targets.filter { target ->
-                val selected = "${target.packageName}/${target.userId}" in baseline
-                val matches = when (filter) {
-                    TargetTab.ALL -> true
-                    TargetTab.SELECTED -> selected
-                    TargetTab.SUGGESTED -> target.packageName in recommended
-                }
-                matches && (target.label.contains(query, ignoreCase = true) ||
-                    target.packageName.contains(query, ignoreCase = true))
+            // A UI-only projection. The Vector mutation preconditions below remain authoritative.
+            val display = targets.map { target ->
+                val key = "${target.packageName}/${target.userId}"
+                ScopeEditorPresentation.Row(key, target.packageName, target.label,
+                    selected = key in baseline, suggested = target.packageName in recommended)
             }
+            val counts = ScopeEditorPresentation.counts(display)
+            val shownKeys = display.filter { row ->
+                val inTab = when (filter) {
+                    TargetTab.ALL -> true
+                    TargetTab.SELECTED -> row.selected
+                    TargetTab.SUGGESTED -> row.suggested
+                }
+                inTab && ScopeEditorPresentation.matches(row, query)
+            }.mapTo(HashSet()) { it.key }
+            val visible = targets.filter { "${it.packageName}/${it.userId}" in shownKeys }
             Column(Modifier.fillMaxSize().padding(padding)) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Saved scope · ${state.entries.size} targets",
-                        style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                    Text("Tap an app to save its scope immediately. Vector's saved configuration is " +
-                        "verified before and after each change; live hooks are not verified.",
+                    Text("App scopes", style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold)
+                    Text("${counts.selected} saved · ${counts.available} visible targets",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("scope_summary"))
+                    Text("Tap a supported app to save one change. Saved scopes do not prove active hooks.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (module.staticScope) Text("Only module-declared static targets are editable.",
@@ -186,26 +200,49 @@ internal fun ScopeDraftPage(
                     if (writeError.isNotBlank()) Text(writeError,
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.labelMedium)
-                    OutlinedTextField(value = query, onValueChange = { query = it.take(120) },
-                        label = { Text("Search apps") }, singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("scope_search"))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = query, onValueChange = { query = it.take(120) },
+                            label = { Text("Search apps or packages") }, singleLine = true,
+                            modifier = Modifier.weight(1f).testTag("scope_search"))
+                        if (query.isNotBlank()) TextButton(onClick = { query = "" },
+                            enabled = !applying, modifier = Modifier.testTag("scope_clear_search")) {
+                            Text("Clear")
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(selected = filter == TargetTab.ALL,
-                            onClick = { filter = TargetTab.ALL }, label = { Text("All") })
+                            onClick = { filter = TargetTab.ALL },
+                            modifier = Modifier.testTag("scope_filter_all"),
+                            label = { Text("All (${counts.available})") })
                         FilterChip(selected = filter == TargetTab.SELECTED,
-                            onClick = { filter = TargetTab.SELECTED }, label = { Text("Selected") })
+                            onClick = { filter = TargetTab.SELECTED },
+                            modifier = Modifier.testTag("scope_filter_selected"),
+                            label = { Text("Selected (${counts.selected})") })
                         FilterChip(selected = filter == TargetTab.SUGGESTED,
-                            onClick = { filter = TargetTab.SUGGESTED }, label = { Text("Suggested") })
+                            onClick = { filter = TargetTab.SUGGESTED },
+                            modifier = Modifier.testTag("scope_filter_suggested"),
+                            label = { Text("Suggested (${counts.suggested})") })
                     }
                 }
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (scanError) item { Text("App inventory unavailable; showing saved targets only") }
                     if (installed == null && !scanError) item { Text("Loading apps…") }
-                    if (filter == TargetTab.SUGGESTED && recommended.isEmpty()) item {
-                        Text("No declared scope suggestions in this module APK.")
-                    } else if (visible.isEmpty() && installed != null) item {
-                        Text("No apps match this view.")
+                    if (visible.isEmpty() && (installed != null || scanError)) item {
+                        Column(Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(ScopeEditorPresentation.emptyMessage(query,
+                                filter == TargetTab.SELECTED, filter == TargetTab.SUGGESTED),
+                                style = MaterialTheme.typography.bodyMedium)
+                            if (query.isNotBlank() || filter != TargetTab.ALL) {
+                                TextButton(onClick = { query = ""; filter = TargetTab.ALL },
+                                    modifier = Modifier.testTag("scope_reset_filters")) {
+                                    Text("Show all targets")
+                                }
+                            }
+                        }
                     }
                     items(visible, key = { "${it.packageName}/${it.userId}" }) { target ->
                         val key = "${target.packageName}/${target.userId}"
@@ -220,19 +257,21 @@ internal fun ScopeDraftPage(
                         val editable = !applying && enabled != null && supported && (selected || enabled == true)
                         val reason = when {
                             target.userId != 0 -> "Other Android user · read-only"
+                            target.savedOnly -> "Unavailable app · read-only saved target"
                             target.system -> "System app · read-only"
                             manager || target.packageName == context.packageName -> "Manager app · read-only"
                             target.packageName == module.packageName -> "Module APK · read-only"
-                            target.savedOnly -> "Uninstalled or unavailable · read-only"
                             !permittedByStatic -> "Outside declared static scope"
                             enabled == false && !selected -> "Enable module to add this target"
-                            else -> if (selected) "Saved · tap to remove" else "Tap to add to saved scope"
+                            else -> if (selected) "Saved in Vector · tap to remove" else "Tap to add to Vector"
                         }
                         val toggle = { change(if (selected) VectorMutation.Action.REMOVE_SCOPE
                             else VectorMutation.Action.ADD_SCOPE, target.packageName) }
                         Card(colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                            modifier = Modifier.fillMaxWidth().clickable(enabled = editable) { toggle() },
+                            modifier = Modifier.fillMaxWidth()
+                                .testTag("scope_row_$key")
+                                .clickable(enabled = editable) { toggle() },
                             shape = RoundedCornerShape(16.dp)) {
                             Row(Modifier.fillMaxWidth().padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically) {
@@ -267,12 +306,15 @@ internal fun ScopeDraftPage(
 }
 
 @Composable
-private fun ScopeInfo(padding: PaddingValues, message: String) {
+private fun ScopeInfo(padding: PaddingValues, message: String,
+    onRetry: (() -> Unit)? = null) {
     Column(Modifier.fillMaxSize().padding(padding).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(message, style = MaterialTheme.typography.bodyLarge)
         Text("Saved scopes are unavailable until Vector is connected.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (onRetry != null) Button(onClick = onRetry,
+            modifier = Modifier.testTag("scope_retry_read")) { Text("Retry scope read") }
     }
 }

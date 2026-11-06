@@ -162,3 +162,9 @@ R4D introduces a read-only, hosted Gradle resolved dependency inventory, explici
 ## R5A Modules UI refinement (source candidate; requires hosted and physical acceptance)
 
 R5A returns focus to the app UI. Modules now presents detected-APK counts, safe visible status filters, quick search reset, clearer module cards and improved empty states. Module Detail makes saved-state/actions primary and moves technical details into an expander. No Vector write implementation, signing or release policies changed. See `docs/R5A_MODULES_UX.md`. Hosted CI + visual acceptance pending; do not claim actual device correctness from source tests.
+
+## R5B — Scope Editor UX refinement (source candidate, 2026-11-05)
+
+- The saved-scope editor now shows counts for all/selected/suggested targets, tokenized local search across labels and packages, a clear/reset affordance, and better empty states. Read-only targets remain visually distinguished; a failed saved-scope read offers an explicit user-tap retry.
+- Existing immediate, one-at-a-time journaled Vector writes, fresh pre-state, read-back verification and disabled-module enable protection remain unchanged. No root call on Compose rendering, no bulk scope write, and no automatic retry after unknown mutation outcome.
+- Python/JVM tests and GitHub Actions API36 emulator build are required; real-device scope browsing and visual acceptance remain separate. No changes to production signing.

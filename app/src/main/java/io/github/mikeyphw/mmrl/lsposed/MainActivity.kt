@@ -266,6 +266,7 @@ private fun StandaloneApp() {
                         enabled = (vector as? VectorState.Ready)?.snapshot?.modules
                             ?.get(currentModule.packageName)?.enabled,
                         onWriteBusy = { session.writeBusy = it },
+                        onRetryRead = { if (!session.writeBusy) scopeRequest++ },
                         onCommitted = { result ->
                             vector = VectorState.Ready(result.snapshot)
                             appsIndex = AppsIndexState.Idle
