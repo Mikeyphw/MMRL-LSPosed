@@ -44,6 +44,10 @@ class S09EmulatorUiTest {
         compose.onNodeWithTag("module_search").performTextInput("ci-test-absent-module")
         compose.onNodeWithTag("module_search").assertTextContains("ci-test-absent-module")
         compose.onNodeWithTag("module_filter_toggle").performClick()
+        compose.onNodeWithTag("modules_filter_all").assertExists()
+        compose.onNodeWithTag("modules_filter_enabled").assertExists()
+        compose.onNodeWithTag("modules_clear_search").performClick()
+        compose.onNodeWithTag("modules_clear_search").assertDoesNotExist()
         compose.onNodeWithTag("modules_repository").assertExists()
         assertNoImplicitVectorConnection()
     }

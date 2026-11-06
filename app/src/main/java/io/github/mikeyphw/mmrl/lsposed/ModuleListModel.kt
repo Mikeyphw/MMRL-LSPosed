@@ -11,6 +11,31 @@ internal object ModuleListModel {
 
     data class Group(val kind: GroupKind, val modules: List<ModuleDiscovery.Candidate>)
 
+    /** Counts only APKs currently detected on this device, not unrelated Vector entries.
+     * These are saved configuration flags, never evidence that hooks are running. */
+    data class Summary(
+        val installed: Int,
+        val savedAvailable: Boolean,
+        val enabled: Int,
+        val disabled: Int,
+        val notIndexed: Int,
+    )
+
+    fun summary(
+        candidates: List<ModuleDiscovery.Candidate>,
+        enabledByPackage: Map<String, Boolean>?,
+    ): Summary {
+        if (enabledByPackage == null) return Summary(candidates.size, false, 0, 0, 0)
+        val enabled = candidates.count { enabledByPackage[it.packageName] == true }
+        val disabled = candidates.count { enabledByPackage[it.packageName] == false }
+        return Summary(candidates.size, true, enabled, disabled,
+            candidates.size - enabled - disabled)
+    }
+
+    fun hasActiveFilters(query: String, format: FormatFilter, state: StateFilter,
+                         sort: Sort): Boolean = query.isNotBlank() ||
+        format != FormatFilter.ALL || state != StateFilter.ALL || sort != Sort.NAME_AZ
+
     fun groups(
         candidates: List<ModuleDiscovery.Candidate>,
         enabledByPackage: Map<String, Boolean>?,
