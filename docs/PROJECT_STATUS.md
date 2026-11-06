@@ -168,3 +168,7 @@ R5A returns focus to the app UI. Modules now presents detected-APK counts, safe 
 - The saved-scope editor now shows counts for all/selected/suggested targets, tokenized local search across labels and packages, a clear/reset affordance, and better empty states. Read-only targets remain visually distinguished; a failed saved-scope read offers an explicit user-tap retry.
 - Existing immediate, one-at-a-time journaled Vector writes, fresh pre-state, read-back verification and disabled-module enable protection remain unchanged. No root call on Compose rendering, no bulk scope write, and no automatic retry after unknown mutation outcome.
 - Python/JVM tests and GitHub Actions API36 emulator build are required; real-device scope browsing and visual acceptance remain separate. No changes to production signing.
+
+## R5C — Discover and Downloads UX source candidate
+
+Based on merged PR #13, commit `d5084c54ba3a260b873397d7d50876d24f421177`. Discover now pages through local filtered/sorted catalog data instead of stopping at 250 entries, and Downloads has independent local filtering for releases, CI runs and selected artifacts. No download or privileged-device security mechanisms changed. Hosted CI and physical UX acceptance are **pending** until the new PR run/device verification; see `docs/R5C_DISCOVER_DOWNLOADS_UX.md`.

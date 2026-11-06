@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -23,12 +25,14 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -37,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
@@ -61,6 +66,9 @@ internal fun DiscoverPage(padding: PaddingValues) {
     var busy by remember { mutableStateOf(false) }
     var catalog by remember { mutableStateOf<VectorModuleCatalog.Result?>(null) }
     var message by remember { mutableStateOf("") }
+    var visibleLimit by rememberSaveable { mutableIntStateOf(EcosystemPresentation.DISCOVER_PAGE) }
+
+    LaunchedEffect(term, ordering) { visibleLimit = EcosystemPresentation.DISCOVER_PAGE }
 
     fun load() {
         if (busy) return
@@ -88,6 +96,7 @@ internal fun DiscoverPage(padding: PaddingValues) {
         VectorModuleCatalog.sort(
             VectorModuleCatalog.filter(catalog?.modules.orEmpty(), term), ordering)
     }
+    val visibleResults = results.take(visibleLimit)
     LazyColumn(Modifier.fillMaxSize().padding(padding),
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -102,9 +111,12 @@ internal fun DiscoverPage(padding: PaddingValues) {
             OutlinedTextField(value = term, onValueChange = { term = it.take(80) },
                 label = { Text("Search LSPosed modules") },
                 singleLine = true, modifier = Modifier.fillMaxWidth().testTag("discover_query"))
+            if (term.isNotEmpty()) TextButton(onClick = { term = "" },
+                modifier = Modifier.testTag("discover_clear_query")) { Text("Clear search") }
         }
         item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(onClick = { load() }, enabled = !busy,
                     modifier = Modifier.testTag("discover_search")) {
                     Text(if (busy) "Loading…" else "Refresh catalog")
@@ -136,7 +148,7 @@ internal fun DiscoverPage(padding: PaddingValues) {
                     }
                 }
             }
-            if (catalog != null) Text("${results.size} of ${catalog!!.modules.size} modules · sorted locally",
+            if (catalog != null) Text("${results.size} matches · ${catalog!!.modules.size} catalog entries · local sorting",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp))
@@ -147,17 +159,26 @@ internal fun DiscoverPage(padding: PaddingValues) {
         }
         if (message.isNotBlank()) item { Text(message, color = MaterialTheme.colorScheme.error) }
         if (busy && active == null) item { Text("Loading LSPosed catalog…") }
-        if (!busy && active != null && results.isEmpty()) item { Text("No modules match your search") }
-        items(results.take(250), key = { it.packageName }) { repo ->
+        if (!busy && active != null && results.isEmpty()) item {
+            Text(if (term.isBlank()) "The saved catalog contains no displayable modules."
+                else "No modules match your search. Try a package name or clear the search.")
+            if (term.isNotBlank()) TextButton(onClick = { term = "" },
+                modifier = Modifier.testTag("discover_empty_reset")) { Text("Show all modules") }
+        }
+        items(visibleResults, key = { it.packageName }) { repo ->
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(repo.title, style = MaterialTheme.typography.titleMedium)
                     Text(repo.packageName, style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (repo.summary.isNotBlank()) Text(repo.summary,
-                        style = MaterialTheme.typography.bodySmall)
-                    Text("${repo.stars} stars" + if (repo.version.isNotBlank()) " · ${repo.version}" else "",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall, maxLines = 3,
+                        overflow = TextOverflow.Ellipsis)
+                    Text(buildString {
+                        append("${repo.stars} stars")
+                        if (repo.version.isNotBlank()) append(" · ${repo.version}")
+                        if (repo.updated.length >= 10) append(" · ${repo.updated.take(10)}")
+                    }, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall)
                     OutlinedButton(onClick = {
                         val uri = Uri.parse(repo.pageUrl)
@@ -172,9 +193,15 @@ internal fun DiscoverPage(padding: PaddingValues) {
                 }
             }
         }
-        if (results.size > 250) item {
-            Text("Showing the first 250 matches. Refine your search to see more.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (visibleResults.size < results.size) item {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Showing ${visibleResults.size} of ${results.size} matching modules",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = {
+                    visibleLimit = EcosystemPresentation.nextLimit(visibleLimit, results.size)
+                }, modifier = Modifier.testTag("discover_show_more")) { Text("Show more modules") }
+            }
         }
     }
 }
@@ -184,6 +211,9 @@ internal fun DownloadsPage(padding: PaddingValues) {
     val context = LocalContext.current
     val coroutine = rememberCoroutineScope()
     var tab by rememberSaveable { mutableStateOf(0) }
+    var releaseQuery by rememberSaveable { mutableStateOf("") }
+    var runQuery by rememberSaveable { mutableStateOf("") }
+    var artifactQuery by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var releases by androidx.compose.runtime.remember { mutableStateOf<List<GitHubEcosystem.Release>?>(null) }
     var runs by androidx.compose.runtime.remember { mutableStateOf<List<GitHubEcosystem.Run>?>(null) }
@@ -222,6 +252,16 @@ internal fun DownloadsPage(padding: PaddingValues) {
                     if (tab != 1) { tab = 1; selectedRun = null; artifacts = null; message = "" }
                 }, label = { Text("CI artifacts") })
             }
+        }
+        item {
+            val currentQuery = if (tab == 0) releaseQuery else runQuery
+            OutlinedTextField(value = currentQuery, onValueChange = {
+                if (tab == 0) releaseQuery = it.take(80) else runQuery = it.take(80)
+            }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("downloads_query"),
+                label = { Text(if (tab == 0) "Filter releases and asset names" else "Filter runs by ID, status or commit") })
+            if (currentQuery.isNotEmpty()) TextButton(onClick = {
+                if (tab == 0) releaseQuery = "" else runQuery = ""
+            }, modifier = Modifier.testTag("downloads_clear_query")) { Text("Clear filter") }
         }
         item {
             Button(onClick = {
@@ -372,9 +412,23 @@ internal fun DownloadsPage(padding: PaddingValues) {
         }
         if (tab == 0) {
             val entries = releases
+            val filtered = entries.orEmpty().filter { release ->
+                EcosystemPresentation.matches(releaseQuery, release.name, release.tag,
+                    release.assets.joinToString(" ") { it.name })
+            }
             if (entries == null && !busy) item { Text("Load the official releases when you're ready.") }
             if (entries != null && entries.isEmpty()) item { Text("No public non-prerelease GitHub releases found") }
-            items(entries.orEmpty(), key = { it.tag }) { release ->
+            if (entries != null && entries.isNotEmpty()) item {
+                Text("${filtered.size} of ${entries.size} releases",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (entries != null && entries.isNotEmpty() && filtered.isEmpty()) item {
+                Text("No releases match this filter. Try the tag or asset filename.")
+                TextButton(onClick = { releaseQuery = "" },
+                    modifier = Modifier.testTag("downloads_empty_reset")) { Text("Show all releases") }
+            }
+            items(filtered, key = { it.tag }) { release ->
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -429,47 +483,45 @@ internal fun DownloadsPage(padding: PaddingValues) {
             }
         } else {
             val entries = runs
+            val filtered = entries.orEmpty().filter { run ->
+                EcosystemPresentation.matches(runQuery, run.id.toString(), run.commit,
+                    run.status, run.headBranch, run.event)
+            }
             if (entries == null && !busy) item {
                 Text("Load recent GitHub Actions runs. Artifacts open on GitHub and may require sign-in.")
             }
             if (entries != null && entries.isEmpty()) item { Text("No public CI runs found") }
-            items(entries.orEmpty(), key = { it.id }) { run ->
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
-                    Column(Modifier.fillMaxWidth().padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Run ${run.id} · ${run.status}", style = MaterialTheme.typography.titleMedium)
-                        Text("Source ${run.commit} · attempt ${run.attempt} · CI status is not a signing proof",
-                            style = MaterialTheme.typography.bodySmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = {
-                                selectedRun = run; artifacts = null; currentAttemptOnly = true
-                                busy = true; message = ""
-                                coroutine.launch {
-                                    withContext(Dispatchers.IO) { runCatching {
-                                        GitHubEcosystem.runArtifacts(run, context.applicationContext)
-                                    } }.onSuccess { artifacts = it }.onFailure {
-                                        message = it.message?.take(180) ?: "Artifact lookup unavailable"
-                                    }
-                                    busy = false
-                                }
-                            }, enabled = !busy) { Text("Inspect artifacts") }
-                            OutlinedButton(onClick = {
-                                runCatching { openGitHub(context, run.htmlUrl) }
-                                    .onFailure { message = "No browser available" }
-                            }) { Text("GitHub") }
-                        }
-                    }
-                }
+            if (entries != null && entries.isNotEmpty()) item {
+                Text("${filtered.size} of ${entries.size} recent CI runs",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (entries != null && entries.isNotEmpty() && filtered.isEmpty()) item {
+                Text("No runs match this filter.")
+                TextButton(onClick = { runQuery = "" },
+                    modifier = Modifier.testTag("downloads_empty_reset")) { Text("Show all runs") }
             }
             val active = selectedRun
             if (active != null) {
                 item {
-                    Text("Artifacts · run ${active.id} (current attempt ${active.attempt}; archives can predate reruns)",
+                    Text("Selected run ${active.id} · attempt ${active.attempt}",
                         style = MaterialTheme.typography.titleMedium)
+                    TextButton(onClick = {
+                        selectedRun = null; artifacts = null; artifactQuery = ""
+                    }, enabled = !busy, modifier = Modifier.testTag("ci_close_selected_run")) {
+                        Text("Close selected run")
+                    }
+                    if (artifacts == null && busy) Text("Loading artifacts for this run…")
                     Text("GitHub metadata is not a Devtool receipt, APK signature, or verified archive. " +
-                        "Open the evidence on GitHub for independent review.",
+                        "CI archives can predate reruns; review evidence on GitHub.",
                         style = MaterialTheme.typography.bodySmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = artifactQuery, onValueChange = { artifactQuery = it.take(80) },
+                        singleLine = true, modifier = Modifier.fillMaxWidth().testTag("ci_artifact_query"),
+                        label = { Text("Filter artifacts by name or ID") })
+                    if (artifactQuery.isNotEmpty()) TextButton(onClick = { artifactQuery = "" },
+                        modifier = Modifier.testTag("ci_artifact_clear")) { Text("Clear artifact filter") }
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(selected = currentAttemptOnly, onClick = { currentAttemptOnly = true },
                             modifier = Modifier.testTag("ci_current_attempt"),
                             label = { Text("Current attempt") })
@@ -478,12 +530,16 @@ internal fun DownloadsPage(padding: PaddingValues) {
                             label = { Text("All artifacts") })
                     }
                 }
-                val visibleArtifacts = if (currentAttemptOnly)
+                val attemptArtifacts = if (currentAttemptOnly)
                     CiArtifactFederation.currentAttempt(active, artifacts.orEmpty())
                     else artifacts.orEmpty()
+                val visibleArtifacts = attemptArtifacts.filter { artifact ->
+                    EcosystemPresentation.matches(artifactQuery, artifact.name, artifact.id.toString())
+                }
                 if (artifacts != null && visibleArtifacts.isEmpty()) item {
-                    Text(if (currentAttemptOnly)
-                        "No artifacts with current-run and attempt-bound names. View all for older or unclassified entries."
+                    Text(if (artifactQuery.isNotBlank()) "No artifacts match this filter."
+                        else if (currentAttemptOnly)
+                            "No artifacts with current-run and attempt-bound names. View all for older or unclassified entries."
                         else "No accessible artifacts in this run")
                 }
                 items(visibleArtifacts, key = { it.id }) { artifact ->
@@ -538,6 +594,36 @@ internal fun DownloadsPage(padding: PaddingValues) {
                     }
                 }
             }
+            items(filtered, key = { it.id }) { run ->
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Run ${run.id} · ${run.status}", style = MaterialTheme.typography.titleMedium)
+                        Text("Source ${run.commit} · attempt ${run.attempt} · CI status is not a signing proof",
+                            style = MaterialTheme.typography.bodySmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = {
+                                selectedRun = run; artifacts = null; currentAttemptOnly = true
+                                artifactQuery = ""
+                                busy = true; message = ""
+                                coroutine.launch {
+                                    withContext(Dispatchers.IO) { runCatching {
+                                        GitHubEcosystem.runArtifacts(run, context.applicationContext)
+                                    } }.onSuccess { artifacts = it }.onFailure {
+                                        message = it.message?.take(180) ?: "Artifact lookup unavailable"
+                                    }
+                                    busy = false
+                                }
+                            }, enabled = !busy) { Text("Inspect artifacts") }
+                            OutlinedButton(onClick = {
+                                runCatching { openGitHub(context, run.htmlUrl) }
+                                    .onFailure { message = "No browser available" }
+                            }) { Text("GitHub") }
+                        }
+                    }
+                }
+            }
+
         }
     }
 }
