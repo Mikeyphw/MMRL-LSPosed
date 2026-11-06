@@ -36,6 +36,9 @@ class SharedCoreSourceContract(unittest.TestCase):
         adapter = (ROOT / "integration/shared-contracts/build.gradle.kts").read_text()
         self.assertIn('alias(libs.plugins.android.library)', adapter)
         self.assertIn('third_party/mmrl-shared/src/main/kotlin', adapter)
+        self.assertIn('sourceSets.named("main")', adapter)
+        self.assertIn('kotlin.directories.add(', adapter)
+        self.assertNotIn('java.srcDir(', adapter)
         self.assertNotIn('mavenLocal()', adapter)
         self.assertNotIn('exec {', adapter)
 

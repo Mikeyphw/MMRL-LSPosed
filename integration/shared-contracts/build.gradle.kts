@@ -11,9 +11,13 @@ android {
     defaultConfig {
         minSdk = 26
     }
-    sourceSets.getByName("main").java.srcDir(
-        rootProject.file("third_party/mmrl-shared/src/main/kotlin")
-    )
+    // AGP 9 built-in Kotlin does not compile Kotlin roots registered as Java sources.
+    // Keep this directory linked to the immutable MMRL-Shared Git submodule.
+    sourceSets.named("main") {
+        kotlin.directories.add(
+            rootProject.file("third_party/mmrl-shared/src/main/kotlin").absolutePath
+        )
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
