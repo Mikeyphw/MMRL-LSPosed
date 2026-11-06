@@ -158,3 +158,7 @@ Devtool federation coordination continues separately without rewriting MMRL's ma
 ## R4D-01 supply-chain inventory and release qualification (implementation candidate)
 
 R4D introduces a read-only, hosted Gradle resolved dependency inventory, explicitly incomplete CycloneDX 1.6 BOM, unverified-license list, source/run/attempt SHA-256 evidence manifest and hard `BLOCKED` report. It does not sign, publish or install any APK. See `docs/R4D_SUPPLY_CHAIN_AND_QUALIFICATION.md` for limitations and remaining release-gate debt. Physical S11/R4C testing, distinct production certificate enrollment, API 26 smoke, complete license/reproducibility review, genuine signed-release attestation, Environment protection checks and manual publication admission remain pending. PR and trusted-main CI for this source candidate must be checked separately; source tests are not acceptance.
+
+## R5A Modules UI refinement (source candidate; requires hosted and physical acceptance)
+
+R5A returns focus to the app UI. Modules now presents detected-APK counts, safe visible status filters, quick search reset, clearer module cards and improved empty states. Module Detail makes saved-state/actions primary and moves technical details into an expander. No Vector write implementation, signing or release policies changed. See `docs/R5A_MODULES_UX.md`. Hosted CI + visual acceptance pending; do not claim actual device correctness from source tests.

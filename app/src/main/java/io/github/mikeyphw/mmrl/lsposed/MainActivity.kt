@@ -76,6 +76,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -469,8 +471,8 @@ private fun HomePage(
     }
 }
 
-/** R1: screenshot-inspired module overview. Every enabled/disabled flag is saved Vector
- * configuration, never proof of active hooks. The catalog is never queried on this page. */
+/** R5A: a module-first overview. Vector flags are saved configuration only.
+ * It never fetches the network or writes Vector when this screen is composed. */
 @Composable
 private fun ModuleListPage(
     candidates: List<ModuleDiscovery.Candidate>?,
@@ -492,10 +494,14 @@ private fun ModuleListPage(
     var sortMenuExpanded by remember { mutableStateOf(false) }
     val saved = (vector as? VectorState.Ready)?.snapshot?.modules
     val savedFlags = remember(saved) { saved?.mapValues { it.value.enabled } }
+    val summary = remember(candidates, savedFlags) {
+        ModuleListModel.summary(candidates.orEmpty(), savedFlags)
+    }
     val groups = remember(candidates, savedFlags, query, format, status, order) {
         ModuleListModel.groups(candidates.orEmpty(), savedFlags, query, format, status, order)
     }
     val shown = groups.sumOf { it.modules.size }
+    val hasFilters = ModuleListModel.hasActiveFilters(query, format, status, order)
     val versions = remember(candidates, catalog) {
         ModuleVersionIndex.forInstalled(candidates.orEmpty().filter {
             it.format != ModuleDiscovery.Format.UNKNOWN
@@ -503,32 +509,39 @@ private fun ModuleListPage(
     }
     val newerCount = ModuleVersionIndex.newerCount(versions)
     val comparedCount = ModuleVersionIndex.comparableCount(versions)
+    val clearFilters = {
+        query = ""
+        format = ModuleListModel.FormatFilter.ALL
+        status = ModuleListModel.StateFilter.ALL
+        order = ModuleListModel.Sort.NAME_AZ
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(padding),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item(key = "module_header") {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Modules", style = MaterialTheme.typography.headlineLarge,
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Modules", style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.Bold)
-                    Text(
-                        if (saved == null) "${candidates?.size ?: 0} detected · Vector status unavailable"
-                        else "${saved.values.count { it.enabled }} of ${saved.size} enabled in Vector",
-                        style = MaterialTheme.typography.bodyMedium,
+                    Text(when {
+                        candidates == null -> "Finding installed modules…"
+                        !summary.savedAvailable -> "${summary.installed} installed · Vector state unavailable"
+                        else -> "${summary.installed} installed · ${summary.enabled} enabled in saved Vector state"
+                    }, style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("module_status_summary"),
-                    )
+                        modifier = Modifier.testTag("module_status_summary"))
                 }
                 IconButton(onClick = onRefresh, modifier = Modifier.testTag("modules_refresh")) {
                     Icon(painterResource(R.drawable.ic_refresh), contentDescription =
-                        if (vector is VectorState.Ready) "Refresh installed modules and saved Vector state"
+                        if (vector is VectorState.Ready) "Refresh modules and saved Vector state"
                         else "Refresh installed modules")
                 }
                 IconButton(onClick = onDiscover, modifier = Modifier.testTag("modules_repository")) {
-                    Icon(painterResource(R.drawable.ic_discover), contentDescription = "Open module repository")
+                    Icon(painterResource(R.drawable.ic_discover), contentDescription = "Browse module repository")
                 }
                 IconButton(onClick = onSettings, modifier = Modifier.testTag("open_settings")) {
                     Icon(painterResource(R.drawable.ic_settings), contentDescription = "Settings")
@@ -541,36 +554,62 @@ private fun ModuleListPage(
                 label = { Text(stringResource(R.string.search_modules)) },
                 leadingIcon = { Icon(painterResource(R.drawable.ic_search), contentDescription = null) },
                 trailingIcon = {
-                    IconButton(onClick = { filtersExpanded = !filtersExpanded },
-                        modifier = Modifier.testTag("module_filter_toggle")) {
-                        Icon(painterResource(R.drawable.ic_filter),
-                            contentDescription = if (filtersExpanded) "Hide filters and sorting" else "Show filters and sorting")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (query.isNotEmpty()) IconButton(onClick = { query = "" },
+                            modifier = Modifier.testTag("modules_clear_search")
+                                .semantics { contentDescription = "Clear search" }) {
+                            Text("×", style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        IconButton(onClick = { filtersExpanded = !filtersExpanded },
+                            modifier = Modifier.testTag("module_filter_toggle")) {
+                            Icon(painterResource(R.drawable.ic_filter), contentDescription =
+                                if (filtersExpanded) "Hide advanced filters" else "Show advanced filters")
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth().testTag("module_search"),
-                singleLine = true, shape = RoundedCornerShape(24.dp),
+                singleLine = true, shape = RoundedCornerShape(22.dp),
             )
         }
-        item(key = "module_discover_link") {
+        item(key = "module_quick_filters") {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                FilterChip(selected = status == ModuleListModel.StateFilter.ALL,
+                    onClick = { status = ModuleListModel.StateFilter.ALL },
+                    label = { Text("All") }, modifier = Modifier.testTag("modules_filter_all"))
+                FilterChip(selected = status == ModuleListModel.StateFilter.ENABLED,
+                    enabled = saved != null,
+                    onClick = { status = ModuleListModel.StateFilter.ENABLED },
+                    label = { Text("Enabled") }, modifier = Modifier.testTag("modules_filter_enabled"))
+                FilterChip(selected = status == ModuleListModel.StateFilter.DISABLED,
+                    enabled = saved != null,
+                    onClick = { status = ModuleListModel.StateFilter.DISABLED },
+                    label = { Text("Disabled") }, modifier = Modifier.testTag("modules_filter_disabled"))
+                FilterChip(selected = status == ModuleListModel.StateFilter.NOT_INDEXED,
+                    enabled = saved != null,
+                    onClick = { status = ModuleListModel.StateFilter.NOT_INDEXED },
+                    label = { Text("Not indexed") }, modifier = Modifier.testTag("modules_filter_unindexed"))
+            }
+        }
+        if (newerCount > 0) item(key = "module_discover_link") {
             Surface(
                 modifier = Modifier.fillMaxWidth().clickable(onClick = onDiscover)
                     .testTag("modules_check_updates"),
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 shape = RoundedCornerShape(18.dp),
             ) {
-                Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Icon(painterResource(R.drawable.ic_discover), contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary)
                     Column(Modifier.weight(1f)) {
-                        Text(if (newerCount > 0)
-                            "$newerCount newer catalog version${if (newerCount == 1) "" else "s"}"
-                            else "Browse updates in the repository",
+                        Text("$newerCount newer catalog version${if (newerCount == 1) "" else "s"}",
                             style = MaterialTheme.typography.titleSmall,
                             modifier = Modifier.testTag("modules_updates_summary"))
-                        Text(if (catalog == null) "Open Discover to save a catalog for comparison"
-                            else "$comparedCount comparable installed versions · publisher and APK signature not verified",
+                        Text("$comparedCount comparable · publisher and APK signature not verified",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -578,56 +617,47 @@ private fun ModuleListPage(
             }
         }
         if (filtersExpanded) item(key = "module_filters") {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Module type", style = MaterialTheme.typography.labelMedium)
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ModuleListModel.FormatFilter.entries.forEach { f ->
-                        FilterChip(selected = format == f, onClick = { format = f },
-                            label = { Text(when (f) {
-                                ModuleListModel.FormatFilter.ALL -> "All types"
-                                ModuleListModel.FormatFilter.MODERN -> "Modern"
-                                ModuleListModel.FormatFilter.LEGACY -> "Legacy"
-                            }) })
-                    }
-                }
-                Text("Saved Vector status", style = MaterialTheme.typography.labelMedium)
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ModuleListModel.StateFilter.entries.forEach { f ->
-                        FilterChip(selected = status == f, onClick = { status = f },
-                            enabled = saved != null || f == ModuleListModel.StateFilter.ALL,
-                            label = { Text(when (f) {
-                                ModuleListModel.StateFilter.ALL -> "All"
-                                ModuleListModel.StateFilter.ENABLED -> "Enabled"
-                                ModuleListModel.StateFilter.DISABLED -> "Disabled"
-                                ModuleListModel.StateFilter.NOT_INDEXED -> "Not indexed"
-                            }) })
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Sort", style = MaterialTheme.typography.labelMedium)
-                    Box {
-                        OutlinedButton(onClick = { sortMenuExpanded = true },
-                            modifier = Modifier.testTag("modules_sort")) {
-                            Text(when (order) {
-                                ModuleListModel.Sort.NAME_AZ -> "Name A–Z"
-                                ModuleListModel.Sort.NAME_ZA -> "Name Z–A"
-                                ModuleListModel.Sort.API_DESC -> "API highest"
-                                ModuleListModel.Sort.PACKAGE -> "Package A–Z"
-                            })
+            Card(colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                shape = RoundedCornerShape(18.dp)) {
+                Column(Modifier.fillMaxWidth().padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Module type", style = MaterialTheme.typography.labelMedium)
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ModuleListModel.FormatFilter.entries.forEach { f ->
+                            FilterChip(selected = format == f, onClick = { format = f },
+                                label = { Text(when (f) {
+                                    ModuleListModel.FormatFilter.ALL -> "All types"
+                                    ModuleListModel.FormatFilter.MODERN -> "Modern"
+                                    ModuleListModel.FormatFilter.LEGACY -> "Legacy"
+                                }) })
                         }
-                        DropdownMenu(expanded = sortMenuExpanded,
-                            onDismissRequest = { sortMenuExpanded = false }) {
-                            ModuleListModel.Sort.entries.forEach { s ->
-                                DropdownMenuItem(text = { Text(when (s) {
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Sort", style = MaterialTheme.typography.labelMedium)
+                        Box {
+                            OutlinedButton(onClick = { sortMenuExpanded = true },
+                                modifier = Modifier.testTag("modules_sort")) {
+                                Text(when (order) {
                                     ModuleListModel.Sort.NAME_AZ -> "Name A–Z"
                                     ModuleListModel.Sort.NAME_ZA -> "Name Z–A"
                                     ModuleListModel.Sort.API_DESC -> "API highest"
                                     ModuleListModel.Sort.PACKAGE -> "Package A–Z"
-                                }) }, onClick = { order = s; sortMenuExpanded = false },
-                                    modifier = Modifier.testTag("modules_sort_${s.name.lowercase()}"))
+                                })
+                            }
+                            DropdownMenu(expanded = sortMenuExpanded,
+                                onDismissRequest = { sortMenuExpanded = false }) {
+                                ModuleListModel.Sort.entries.forEach { s ->
+                                    DropdownMenuItem(text = { Text(when (s) {
+                                        ModuleListModel.Sort.NAME_AZ -> "Name A–Z"
+                                        ModuleListModel.Sort.NAME_ZA -> "Name Z–A"
+                                        ModuleListModel.Sort.API_DESC -> "API highest"
+                                        ModuleListModel.Sort.PACKAGE -> "Package A–Z"
+                                    }) }, onClick = { order = s; sortMenuExpanded = false },
+                                        modifier = Modifier.testTag("modules_sort_${s.name.lowercase()}"))
+                                }
                             }
                         }
                     }
@@ -635,9 +665,14 @@ private fun ModuleListPage(
             }
         }
         item(key = "module_count") {
-            Text("$shown matching modules · saved state does not verify live hooks",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("$shown of ${summary.installed} modules",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f).testTag("modules_result_count"))
+                if (hasFilters) TextButton(onClick = clearFilters,
+                    modifier = Modifier.testTag("modules_reset_filters")) { Text("Clear filters") }
+            }
         }
         when {
             hasError -> item(key = "module_error") { SoftInfo(R.string.module_scan_error) }
@@ -647,19 +682,27 @@ private fun ModuleListPage(
                 Text(stringResource(R.string.empty_modules_detail),
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            groups.isEmpty() -> item(key = "module_nomatch") { SoftInfo(R.string.search_empty) }
+            groups.isEmpty() -> item(key = "module_nomatch") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("No modules match these filters", style = MaterialTheme.typography.titleMedium)
+                    Text("Try another search or clear the filters.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (hasFilters) OutlinedButton(onClick = clearFilters,
+                        modifier = Modifier.testTag("modules_empty_reset")) { Text("Show all modules") }
+                }
+            }
             else -> groups.forEach { group ->
                 item(key = "module_group_${group.kind.name}") {
                     Row(verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(when (group.kind) {
                             ModuleListModel.GroupKind.ENABLED -> "Enabled in Vector"
                             ModuleListModel.GroupKind.DISABLED -> "Disabled in Vector"
                             ModuleListModel.GroupKind.NOT_INDEXED -> "Not in Vector inventory"
                             ModuleListModel.GroupKind.UNKNOWN -> "Installed modules"
-                        }, style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary)
+                        }, style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold)
                         Text("${group.modules.size}", style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -667,68 +710,83 @@ private fun ModuleListPage(
                 items(group.modules, key = { "module_${it.packageName}" }) { module ->
                     val stored = saved?.get(module.packageName)
                     val versionAssessment = versions[module.packageName]
-                    Column(Modifier.fillMaxWidth().clickable { onOpen(module) }
-                        .testTag("module_row_${module.packageName}")
-                        .padding(top = 6.dp, bottom = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(verticalAlignment = Alignment.Top,
-                            horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                            InstalledAppIcon(module.packageName, 56)
-                            Column(Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                                Row(verticalAlignment = Alignment.Top,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text(module.name, modifier = Modifier.weight(1f),
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    if (module.versionName.isNotBlank()) Text(module.versionName,
-                                        modifier = Modifier.widthIn(max = 112.dp),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                                Text(module.description.ifBlank { module.packageName },
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically) {
-                                    Text(formatLabel(module.format),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        maxLines = 1)
-                                    if (module.minApiVersion > 0) Text("API ${module.minApiVersion}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    scopeCounts[module.packageName]?.let { count ->
-                                        Text("$count saved scopes", style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Card(modifier = Modifier.fillMaxWidth().clickable { onOpen(module) }
+                            .testTag("module_row_${module.packageName}"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                        shape = RoundedCornerShape(20.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                InstalledAppIcon(module.packageName, 52)
+                                Column(Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(module.name, modifier = Modifier.weight(1f),
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        if (module.versionName.isNotBlank()) Text(module.versionName,
+                                            modifier = Modifier.widthIn(max = 112.dp),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
-                                }
-                                if (versionAssessment?.verdict == ModuleVersionIndex.Verdict.NEWER_IN_CATALOG) {
-                                    Text("Newer catalog version: ${versionAssessment.catalogVersion} · verify publisher and signing",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.tertiary,
-                                        modifier = Modifier.testTag("module_catalog_newer_${module.packageName}"),
-                                        maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                } else if (versionAssessment?.verdict == ModuleVersionIndex.Verdict.NEEDS_MANUAL_REVIEW) {
-                                    Text("Catalog version differs or is nonnumeric · compare manually",
-                                        style = MaterialTheme.typography.labelSmall,
+                                    Text(module.description.ifBlank { module.packageName },
+                                        style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 2)
+                                        maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 }
-                                if (module.format == ModuleDiscovery.Format.UNKNOWN) Text(
-                                    "APK not detected · Vector entry only",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                else if (stored == null && saved != null) Text(
-                                    "APK detected · no Vector entry",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Surface(color = when {
+                                    stored == null -> MaterialTheme.colorScheme.surfaceContainerHigh
+                                    stored.enabled -> MaterialTheme.colorScheme.primaryContainer
+                                    else -> MaterialTheme.colorScheme.surfaceContainerHigh
+                                }, shape = RoundedCornerShape(12.dp)) {
+                                    Text(when {
+                                        saved == null -> "State unavailable"
+                                        stored == null -> "Not indexed"
+                                        stored.enabled -> "Saved: enabled"
+                                        else -> "Saved: disabled"
+                                    }, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (stored?.enabled == true)
+                                            MaterialTheme.colorScheme.onPrimaryContainer
+                                            else MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Text(formatLabel(module.format),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                scopeCounts[module.packageName]?.let { count ->
+                                    Text("$count saved scopes", style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            if (versionAssessment?.verdict == ModuleVersionIndex.Verdict.NEWER_IN_CATALOG) {
+                                Text("Newer catalog version: ${versionAssessment.catalogVersion} · verify publisher and signing",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.testTag("module_catalog_newer_${module.packageName}"),
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            } else if (versionAssessment?.verdict == ModuleVersionIndex.Verdict.NEEDS_MANUAL_REVIEW) {
+                                Text("Catalog version differs or is nonnumeric · compare manually",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2)
+                            }
+                            if (module.format == ModuleDiscovery.Format.UNKNOWN) Text(
+                                "Vector entry only · APK not detected",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            else if (stored == null && saved != null) Text(
+                                "APK installed · no saved Vector entry",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
                 }
             }
@@ -749,24 +807,43 @@ private fun ModuleDetailPage(candidate: ModuleDiscovery.Candidate, vector: Vecto
     var committing by remember(candidate.packageName) { mutableStateOf(false) }
     var request by remember(candidate.packageName) { mutableStateOf<VectorMutation.Request?>(null) }
     var writeMessage by remember(candidate.packageName) { mutableStateOf("") }
+    var detailsExpanded by rememberSaveable(candidate.packageName) { mutableStateOf(false) }
     val stored = (vector as? VectorState.Ready)?.snapshot?.modules?.get(candidate.packageName)
     LazyColumn(modifier = Modifier.fillMaxSize().padding(padding),
         contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
                 Column(Modifier.fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    InstalledAppIcon(candidate.packageName, size = 68)
-                    Text(candidate.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-                    Text(when {
-                        stored == null -> "Saved enabled state unknown"
-                        stored.enabled -> "Enabled in Vector saved configuration"
-                        else -> "Disabled in Vector saved configuration"
-                    }, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("Live hooks are not verified by this manager.",
-                        style = MaterialTheme.typography.bodySmall)
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        InstalledAppIcon(candidate.packageName, size = 64)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(candidate.name, style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.SemiBold)
+                            Text(candidate.versionName.ifBlank { "Installed module" },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    Surface(color = if (stored?.enabled == true)
+                        MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(12.dp)) {
+                        Text(when {
+                            vector !is VectorState.Ready -> "Vector status unavailable"
+                            stored == null -> "Not in saved Vector inventory"
+                            stored.enabled -> "Enabled in saved Vector configuration"
+                            else -> "Disabled in saved Vector configuration"
+                        }, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            .testTag("module_detail_saved_state"),
+                            style = MaterialTheme.typography.labelMedium)
+                    }
                     if (stored != null) Text(
-                        scopeCounts[candidate.packageName]?.let { "$it saved scope targets (last read)" }
-                            ?: "Saved scope count unknown until preview is opened",
+                        scopeCounts[candidate.packageName]?.let { "$it saved scope targets" }
+                            ?: "Open the scope editor to load saved targets",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Live hooks are not verified by this manager.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (stored != null) {
@@ -804,9 +881,13 @@ private fun ModuleDetailPage(candidate: ModuleDiscovery.Candidate, vector: Vecto
             }
         }
         item {
-            SectionHeading(stringResource(R.string.technical_details))
-            Spacer(Modifier.height(8.dp))
-            DetailLine(stringResource(R.string.package_name), candidate.packageName)
+            OutlinedButton(onClick = { detailsExpanded = !detailsExpanded },
+                modifier = Modifier.testTag("module_detail_technical_toggle")) {
+                Text(if (detailsExpanded) "Hide technical details" else "Technical details")
+            }
+            if (detailsExpanded) Column(Modifier.fillMaxWidth().padding(top = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                DetailLine(stringResource(R.string.package_name), candidate.packageName)
             DetailLine(stringResource(R.string.module_format), formatLabel(candidate.format))
             DetailLine("APK version", candidate.versionName.ifBlank { "Unknown" })
             if (catalogAvailable) {
@@ -835,6 +916,7 @@ private fun ModuleDetailPage(candidate: ModuleDiscovery.Candidate, vector: Vecto
                 if (candidate.staticScope) " (static)" else "")
             Text(stringResource(R.string.scope_future), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
     val confirmation = request
