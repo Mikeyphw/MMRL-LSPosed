@@ -21,6 +21,7 @@ import ci_production_signing as r4b
 
 SCHEMA = 'mmrl-lsposed.r4d-inventory.v1'
 SOURCE_INPUTS = (
+    '.gitmodules', 'integration/shared-contracts/build.gradle.kts',
     'gradle/libs.versions.toml', 'settings.gradle.kts', 'app/build.gradle.kts',
     'hook-lab-module/build.gradle.kts', 'hook-lab-target/build.gradle.kts',
     'config/debug-signing.json',

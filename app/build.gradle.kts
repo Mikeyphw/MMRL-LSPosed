@@ -45,6 +45,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":shared-contracts"))
     implementation("androidx.core:core:1.16.0")
     implementation(libs.activity.compose)
     implementation(libs.compose.material3)

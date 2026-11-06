@@ -26,6 +26,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+          submodules: recursive
           fetch-depth: 0
 
       - name: Set up Python 3.12
@@ -251,6 +252,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+          submodules: recursive
 
       - name: Download stable-signed main APK (trusted main only)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -333,6 +335,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+          submodules: recursive
 
       - name: Download same-run Devtool federation evidence for signer continuity
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4

@@ -1,21 +1,21 @@
 package io.github.mikeyphw.mmrl.lsposed
 
+import io.github.mikeyphw.mmrl.shared.GitHubRepository
+import io.github.mikeyphw.mmrl.shared.ReleaseAssetIdentity
+
 /**
  * Public GitHub release *metadata* identity, not APK signature or build attestation.
- * This deliberately supports only plain ASCII release tags and filenames; other
- * releases remain browsable in GitHub rather than weakening the download gate.
+ * The app owns the repository name; shared source owns strict tag/name/URL admission.
+ * No fallback to a permissive legacy URL check is allowed.
  */
 internal object ReleaseIdentityPolicy {
     const val REPOSITORY = "Mikeyphw/MMRL-LSPosed"
-    private val TAG = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
-    private val NAME = Regex("[A-Za-z0-9][A-Za-z0-9_.-]{0,119}\\.(apk|zip)", RegexOption.IGNORE_CASE)
+    private val repository = requireNotNull(GitHubRepository.parse(REPOSITORY))
 
-    fun validTag(tag: String) = TAG.matches(tag) && !tag.contains("..")
-    fun validName(name: String) = NAME.matches(name) && !name.contains("..")
+    fun validTag(tag: String): Boolean = ReleaseAssetIdentity.of(repository, tag, "probe.apk") != null
+    fun validName(name: String): Boolean = ReleaseAssetIdentity.of(repository, "v1", name) != null
     fun releasePage(tag: String, url: String): Boolean =
-        validTag(tag) && url == "https://github.com/$REPOSITORY/releases/tag/$tag"
-
+        ReleaseAssetIdentity.of(repository, tag, "probe.apk")?.matchesReleasePage(url) == true
     fun asset(tag: String, name: String, url: String): Boolean =
-        validTag(tag) && validName(name) &&
-            url == "https://github.com/$REPOSITORY/releases/download/$tag/$name"
+        ReleaseAssetIdentity.of(repository, tag, name)?.matchesAssetUrl(url) == true
 }
