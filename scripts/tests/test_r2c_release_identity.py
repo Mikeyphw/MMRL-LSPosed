@@ -11,10 +11,13 @@ class ReleaseIdentityContracts(unittest.TestCase):
 
     def test_release_url_is_bound_to_repository_tag_and_filename(self):
         policy = self.src('ReleaseIdentityPolicy.kt')
-        for frag in ('fun releasePage(', 'fun asset(', 'validTag(tag)', 'validName(name)',
-                     'releases/download/$tag/$name', 'url == "https://github.com/',
+        for frag in ('fun releasePage(', 'fun asset(', 'fun validTag(', 'fun validName(',
+                     'GitHubRepository.parse(REPOSITORY)', 'ReleaseAssetIdentity.of(',
+                     '.matchesAssetUrl(url)', '.matchesReleasePage(url)',
                      'REPOSITORY = "Mikeyphw/MMRL-LSPosed"'):
             self.assertIn(frag, policy)
+        self.assertNotIn('Regex(', policy)
+        self.assertNotIn('||', policy)
         api = self.src('GitHubEcosystem.kt')
         self.assertIn('ReleaseIdentityPolicy.releasePage(tag, link)', api)
         self.assertIn('ReleaseIdentityPolicy.asset(releaseTag, name, url)', api)

@@ -1,0 +1,3 @@
+[submodule "third_party/mmrl-shared"]
+	path = third_party/mmrl-shared
+	url = https://github.com/Mikeyphw/MMRL-Shared.git
