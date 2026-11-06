@@ -293,3 +293,7 @@ Defer R4D-02 and later multi-scope SBOM/provenance infrastructure. Maintain exis
 - The saved-scope editor now shows counts for all/selected/suggested targets, tokenized local search across labels and packages, a clear/reset affordance, and better empty states. Read-only targets remain visually distinguished; a failed saved-scope read offers an explicit user-tap retry.
 - Existing immediate, one-at-a-time journaled Vector writes, fresh pre-state, read-back verification and disabled-module enable protection remain unchanged. No root call on Compose rendering, no bulk scope write, and no automatic retry after unknown mutation outcome.
 - Python/JVM tests and GitHub Actions API36 emulator build are required; real-device scope browsing and visual acceptance remain separate. No changes to production signing.
+
+## R5C — Discover and Downloads everyday UX (candidate; hosted/device acceptance pending)
+
+After R5A Modules and R5B Scope Editor, R5C adds progressive local catalog browsing, resettable searches and metadata-aware Downloads/CI artifact filtering, without new networking or release qualification layers. See `docs/R5C_DISCOVER_DOWNLOADS_UX.md`. Next: R5D real-device visual acceptance and targeted stability fixes. R4D-02 multi-scope provenance is deferred, not required for this UI work.
