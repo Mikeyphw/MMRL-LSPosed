@@ -118,7 +118,10 @@ private val Accent = Color(0xFF587FC7)
 @Composable
 private fun StandaloneApp() {
     val context = LocalContext.current
-    var appearance by rememberSaveable { mutableStateOf(Appearance.SYSTEM) }
+    // Restore the last appearance after a real cold start, not only Activity recreation.
+    var appearance by rememberSaveable {
+        mutableStateOf(Appearance.valueOf(LocalSettings.appearance(context.applicationContext)))
+    }
     val isDark = when (appearance) {
         Appearance.SYSTEM -> isSystemInDarkTheme()
         Appearance.LIGHT -> false
@@ -252,7 +255,10 @@ private fun StandaloneApp() {
             scopePreview = scopeOpen,
         ) { innerPadding ->
             when {
-                settings -> SettingsPage(appearance, onAppearance = { appearance = it },
+                settings -> SettingsPage(appearance, onAppearance = { selected ->
+                    LocalSettings.setAppearance(context.applicationContext, selected.name)
+                    appearance = selected
+                },
                     vector = vector, onRefreshVector = { vectorRefresh++ },
                     autoConnect = autoConnect, onAutoConnect = { selected ->
                         LocalSettings.setAutoConnect(context.applicationContext, selected)
@@ -293,9 +299,10 @@ private fun StandaloneApp() {
                                 (currentModule.packageName to result.scopes.size)
                         })
                 }
-                section == Section.HOME -> HomePage(combined, vector, innerPadding, onBrowse = {
+                section == Section.HOME -> HomePage(combined, discoveryError, vector, innerPadding, onBrowse = {
                     section = Section.MODULES
-                }, onConnect = { vectorRefresh++ }, onReconciled = { snapshot ->
+                }, onRetryScan = { candidates = null; refreshKey++ },
+                    onConnect = { vectorRefresh++ }, onReconciled = { snapshot ->
                     vector = VectorState.Ready(snapshot)
                     appsIndex = AppsIndexState.Idle
                     session.scopeCounts = emptyMap()
@@ -387,9 +394,11 @@ private fun AppScaffold(
 @Composable
 private fun HomePage(
     candidates: List<ModuleDiscovery.Candidate>?,
+    discoveryError: Boolean,
     vector: VectorState,
     padding: PaddingValues,
     onBrowse: () -> Unit,
+    onRetryScan: () -> Unit,
     onConnect: () -> Unit,
     onReconciled: (VectorReadOnly.Snapshot) -> Unit,
 ) {
@@ -458,9 +467,20 @@ private fun HomePage(
                 onClick = onBrowse) {
                 Row(Modifier.fillMaxWidth().padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        Text(if (candidates == null) stringResource(R.string.loading)
-                            else stringResource(R.string.count_label, candidates.size),
-                            style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(when {
+                            discoveryError -> "Module scan unavailable"
+                            candidates == null -> stringResource(R.string.loading)
+                            else -> stringResource(R.string.count_label, candidates.size)
+                        }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        if (discoveryError) {
+                            Text("The installed-app scan failed. Retry without requesting Vector access.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            OutlinedButton(onClick = onRetryScan,
+                                modifier = Modifier.testTag("home_retry_module_scan")) {
+                                Text("Retry module scan")
+                            }
+                        }
                         Text(stringResource(R.string.read_only_label),
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }

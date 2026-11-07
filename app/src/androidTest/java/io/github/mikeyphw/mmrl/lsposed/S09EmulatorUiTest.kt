@@ -88,6 +88,18 @@ class S09EmulatorUiTest {
         compose.onNodeWithTag("github_token_input").assertExists()
         compose.onNodeWithTag("github_token_check").assertExists()
         compose.onNodeWithTag("nav_modules").assertDoesNotExist()
+        // Persist UI selection without requesting Vector/root or changing its state.
+        try {
+            compose.onNodeWithText("AMOLED").performClick()
+            compose.runOnUiThread {
+                assertTrue("AMOLED preference must persist",
+                    LocalSettings.appearance(compose.activity) == "AMOLED")
+            }
+        } finally {
+            compose.runOnUiThread {
+                LocalSettings.setAppearance(compose.activity, "SYSTEM")
+            }
+        }
         assertNoImplicitVectorConnection()
     }
 }
