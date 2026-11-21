@@ -7,7 +7,7 @@ import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-EXPECTED_SHA = "1bd273c7c386b4116144db5c36659ead47cd299a"
+EXPECTED_SHA = "7e7a07bc6ddbb03b34f7f42d2329fac7433ba3c2"
 SUB = "third_party/mmrl-shared"
 
 
