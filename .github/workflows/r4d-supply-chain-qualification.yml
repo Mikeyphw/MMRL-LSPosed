@@ -51,6 +51,12 @@ jobs:
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
         with:
           validate-wrappers: true
+      - name: Compare KSP plugin marker and cache after setup-gradle (advisory)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        shell: bash
+        run: python3 -B scripts/ci_gradle_plugin_diagnostics.py --job r4d --out "$RUNNER_TEMP/ksp-plugin-diagnostic.json"
+
       - name: Resolve hosted releaseRuntimeClasspath only (no APK build/sign)
         shell: bash
         run: |
@@ -77,6 +83,15 @@ jobs:
           path: ${{ runner.temp }}/r4d-inventory/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish R4D KSP plugin diagnostic evidence (advisory)
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mmrl-lsposed-ksp-r4d-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ksp-plugin-diagnostic.json
+          if-no-files-found: warn
+          retention-days: 7
 
   attest-inventory-only:
     name: Attest SBOM inventory on trusted main (NOT an APK)
