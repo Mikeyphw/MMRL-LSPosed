@@ -9,7 +9,7 @@ composeUi = "1.8.3"
 coroutines = "1.8.1"
 libxposedApi = "102.0.0"
 libsu = "6.0.0"
-ksp = "2.3.1"
+ksp = "2.3.6"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
