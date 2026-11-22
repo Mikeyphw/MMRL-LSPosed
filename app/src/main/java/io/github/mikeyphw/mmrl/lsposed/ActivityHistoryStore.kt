@@ -10,6 +10,7 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.withTransaction
 import io.github.mikeyphw.mmrl.shared.OperationId
 import io.github.mikeyphw.mmrl.shared.OperationKind
 import io.github.mikeyphw.mmrl.shared.OperationOrigin
@@ -42,6 +43,8 @@ internal interface ActivityEntryDao {
     suspend fun recent(): List<ActivityEntry>
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entry: ActivityEntry)
+    @Query("DELETE FROM activity_operations")
+    suspend fun clearProjection()
 }
 
 @Database(entities = [ActivityEntry::class], version = 1, exportSchema = true)
@@ -118,7 +121,6 @@ internal object ActivityHistoryStore {
 
     /** Only saved files that pass existing full SHA-256 verification are projected. */
     suspend fun refresh(context: Context): List<ActivityEntry> = mutex.withLock {
-        val dao = db(context).entries()
         val events = vectorReceipts(context).toMutableList()
         for (saved in VerifiedDownload.listSaved(context)) {
             snapshot(digestId("release", saved.sha256), OperationKind.DOWNLOAD,
@@ -130,7 +132,12 @@ internal object ActivityHistoryStore {
                 OperationStatus.SUCCEEDED, saved.file.lastModified(),
                 "Verified CI artifact receipt · not a release")?.let(events::add)
         }
-        for (event in events) dao.upsert(event)
-        dao.recent()
+        val database = db(context)
+        database.withTransaction {
+            val dao = database.entries()
+            dao.clearProjection()
+            for (event in events) dao.upsert(event)
+        }
+        database.entries().recent()
     }
 }
