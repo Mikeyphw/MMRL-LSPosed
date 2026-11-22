@@ -110,6 +110,7 @@ private enum class Section(val label: Int, val icon: Int) {
     APPS(R.string.apps, R.drawable.ic_apps),
     DISCOVER(R.string.discover, R.drawable.ic_discover),
     DOWNLOADS(R.string.downloads, R.drawable.ic_downloads),
+    ACTIVITY(R.string.activity_history, R.drawable.ic_activity),
 }
 
 private enum class Appearance { SYSTEM, LIGHT, DARK, AMOLED }
@@ -319,6 +320,7 @@ private fun StandaloneApp() {
                     },
                 )
                 section == Section.DISCOVER -> DiscoverPage(innerPadding)
+                section == Section.ACTIVITY -> ActivityPage(innerPadding)
                 else -> DownloadsPage(innerPadding)
             }
         }
