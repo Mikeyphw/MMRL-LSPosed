@@ -42,3 +42,4 @@ __pycache__/
 *.p12
 *.pfx
 *.pkcs12
+ # Devtool runtime state /.devtool/
