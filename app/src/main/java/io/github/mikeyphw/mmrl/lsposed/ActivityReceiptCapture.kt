@@ -30,7 +30,7 @@ internal object ActivityReceiptCapture {
                 percent = row.optInt("percent", -1),
                 failure = if (status == "FAILED") "TRANSFER_FAILED" else "NONE",
             )
-            ActivityReceiptArchive.append(context.applicationContext.filesDir, receipt)
+            ActivityReceiptArchive.append(context.filesDir, receipt)
         }
     }
 
@@ -54,14 +54,17 @@ internal object ActivityReceiptCapture {
                 started = row.optLong("started_at"), updated = row.optLong("closed_at"),
                 percent = if (status == "SUCCEEDED") 100 else 0,
             )
-            ActivityReceiptArchive.append(context.applicationContext.filesDir, receipt)
+            ActivityReceiptArchive.append(context.filesDir, receipt)
         }
     }
 
-    /** Register before any UI-authorized Vector writes. Preserve a strong listener reference. */
+    /** Caller supplies its long-lived application context before UI-authorized
+     * Vector writes. Preserve a strong listener reference and the supplied
+     * storage namespace; never substitute a different package context.
+     */
     @Synchronized fun start(context: Context) {
         if (listener != null) return
-        val app = context.applicationContext
+        val app = context
         val prefs = app.getSharedPreferences("vector_mutation_journal_v1", Context.MODE_PRIVATE)
         // First ingest existing receipts; if corrupt, refuse to register a falsely healthy recorder.
         captureVector(app, prefs)
@@ -81,7 +84,7 @@ internal object ActivityReceiptCapture {
     /** Synchronous second capture path immediately after an authorized UI write finishes. */
     fun afterUiWrite(context: Context): Boolean =
         runCatching {
-            val app = context.applicationContext
+            val app = context
             captureVector(app, app.getSharedPreferences("vector_mutation_journal_v1", Context.MODE_PRIVATE))
         }.fold(onSuccess = { true }, onFailure = {
             android.util.Log.e("ActivityArchive", "Post-write history capture unavailable")
@@ -89,5 +92,5 @@ internal object ActivityReceiptCapture {
         })
 
     fun archived(context: Context): List<ArchivedActivityReceipt> =
-        ActivityReceiptArchive.read(context.applicationContext.filesDir)
+        ActivityReceiptArchive.read(context.filesDir)
 }

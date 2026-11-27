@@ -100,6 +100,25 @@ class EmulatorGateContracts(unittest.TestCase):
         self.assertLess(src.index('db.close()'),src.index('val reopened ='))
         self.assertLess(src.index('reopened.close()'),src.index('context.deleteDatabase(name)'))
 
+    def test_activity_receipts_preserve_supplied_storage_context(self):
+        # S01 run 46036580655: instrumentation Context.applicationContext
+        # is null. Do not redirect package-private preferences or files.
+        root = ROOT / 'app/src/main/java/io/github/mikeyphw/mmrl/lsposed'
+        journal = (root / 'ActivityTransferJournal.kt').read_text()
+        capture = (root / 'ActivityReceiptCapture.kt').read_text()
+        self.assertNotIn('context.applicationContext', journal)
+        self.assertNotIn('context.applicationContext', capture)
+        self.assertIn('context.getSharedPreferences(FILE, Context.MODE_PRIVATE)', journal)
+        self.assertEqual(capture.count('ActivityReceiptArchive.append(context.filesDir, receipt)'), 2)
+        self.assertIn('ActivityReceiptArchive.read(context.filesDir)', capture)
+        test = (ROOT / 'app/src/androidTest/java/io/github/mikeyphw/mmrl/lsposed/M1CTransferAttemptHistoryInstrumentedTest.kt').read_text()
+        self.assertIn('InstrumentationRegistry.getInstrumentation().context', test)
+        self.assertIn('assertTrue(archive.isFile)', test)
+        self.assertIn('prefs.getString("entries", "[]")!!.contains(first)', test)
+        self.assertIn('prefs.getString("entries", "[]")!!.contains(second)', test)
+        self.assertIn('assertEquals("TRANSFER_FAILED", failed.failure)', test)
+        self.assertIn('assertEquals(100, successful.percent)', test)
+
     def test_all_allowlisted_classes_are_executed_and_any_failure_blocks(self):
         identity={'source_sha':'a'*40,'run_id':1,'attempt':1,'event':'pull_request',
                   'app_sha256':'b'*64,'test_sha256':'c'*64}

@@ -26,6 +26,11 @@ class M1CTransferAttemptHistoryInstrumentedTest {
             ActivityTransferJournal.progress(testContext, second, 99, 100)
             ActivityTransferJournal.finish(testContext, second, "SUCCEEDED")
             assertNotEquals(first, second)
+            // Verify persistence in the supplied private namespace, not a
+            // substituted target application context.
+            assertTrue(archive.isFile)
+            assertTrue(prefs.getString("entries", "[]")!!.contains(first))
+            assertTrue(prefs.getString("entries", "[]")!!.contains(second))
             val history = ActivityReceiptCapture.archived(testContext)
             assertEquals(2, history.count { it.id == first || it.id == second })
             val failed = history.single { it.id == first }

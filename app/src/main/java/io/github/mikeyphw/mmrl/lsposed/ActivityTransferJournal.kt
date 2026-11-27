@@ -18,8 +18,10 @@ internal object ActivityTransferJournal {
     private val session = UUID.randomUUID().toString()
     private val allowedSource = Regex("(?:RELEASE|CI:[1-9][0-9]*:[1-9][0-9]*:[1-9][0-9]*)")
 
+    // The supplied Context owns the storage namespace. Instrumentation and
+    // package/storage contexts need not have an Application instance.
     private fun prefs(context: Context) =
-        context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
     private fun read(context: Context): JSONArray {
         val saved = prefs(context).getString(KEY, "[]") ?: throw IOException("Missing history ledger")
