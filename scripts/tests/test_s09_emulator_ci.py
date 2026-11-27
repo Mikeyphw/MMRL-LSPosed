@@ -85,6 +85,21 @@ class EmulatorGateContracts(unittest.TestCase):
         self.assertFalse(ci.junit_passed(0, 'OK (4 tests)\n', '', 1))
         self.assertFalse(ci.junit_passed(0, 'OK (1 test)\nOK (1 test)\n', '', 1))
 
+    def test_room_migration_instrumentation_uses_explicit_database_lifecycle(self):
+        # S01 run 46031858111: RoomDatabase is not a Closeable receiver.
+        # Retain both actual migration/reopen assertions and close before deletion.
+        src=(ROOT/'app/src/androidTest/java/io/github/mikeyphw/mmrl/lsposed/M1CActivityPersistenceInstrumentedTest.kt').read_text()
+        self.assertNotRegex(src, r'\.build\(\)\s*\.use\b')
+        self.assertRegex(src, r'finally\s*\{\s*db\.close\(\)\s*\}')
+        self.assertRegex(src, r'finally\s*\{\s*reopened\.close\(\)\s*\}')
+        self.assertEqual(src.count('.addMigrations(ActivityHistoryMigration1To2).build()'),2)
+        self.assertIn('SQLiteDatabase.openOrCreateDatabase(file, null).use',src)
+        self.assertIn('db.version = 1',src)
+        self.assertIn('db.entries().saveHistory(',src)
+        self.assertIn('reopened.entries().page(limit = 50, offset = 0)',src)
+        self.assertLess(src.index('db.close()'),src.index('val reopened ='))
+        self.assertLess(src.index('reopened.close()'),src.index('context.deleteDatabase(name)'))
+
     def test_all_allowlisted_classes_are_executed_and_any_failure_blocks(self):
         identity={'source_sha':'a'*40,'run_id':1,'attempt':1,'event':'pull_request',
                   'app_sha256':'b'*64,'test_sha256':'c'*64}

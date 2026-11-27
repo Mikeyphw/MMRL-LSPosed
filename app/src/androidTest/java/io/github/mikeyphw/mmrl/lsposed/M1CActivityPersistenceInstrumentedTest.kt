@@ -32,24 +32,32 @@ class M1CActivityPersistenceInstrumentedTest {
                     1,2,100,'old verified receipt',1)""")
                 db.version = 1
             }
-            Room.databaseBuilder(context, ActivityHistoryDatabase::class.java, name)
-                .addMigrations(ActivityHistoryMigration1To2).build().use { db ->
-                    val old = runBlocking { db.entries().recent() }
-                    assertEquals(1, old.size)
-                    assertEquals("download:legacy", old.single().id)
-                    assertEquals("SUCCEEDED", old.single().status)
-                    runBlocking {
-                        db.entries().saveHistory(old.single().copy(
-                            source = "Historical receipt; current trust not implied").historical())
-                    }
+            // RoomDatabase is not a java.io.Closeable in this Room API.
+            // Close each database even when a migration or assertion fails.
+            val db = Room.databaseBuilder(context, ActivityHistoryDatabase::class.java, name)
+                .addMigrations(ActivityHistoryMigration1To2).build()
+            try {
+                val old = runBlocking { db.entries().recent() }
+                assertEquals(1, old.size)
+                assertEquals("download:legacy", old.single().id)
+                assertEquals("SUCCEEDED", old.single().status)
+                runBlocking {
+                    db.entries().saveHistory(old.single().copy(
+                        source = "Historical receipt; current trust not implied").historical())
                 }
-            Room.databaseBuilder(context, ActivityHistoryDatabase::class.java, name)
-                .addMigrations(ActivityHistoryMigration1To2).build().use { reopened ->
-                    val persisted = runBlocking { reopened.entries().page(limit = 50, offset = 0) }
-                    assertEquals(1, persisted.size)
-                    assertEquals("download:legacy", persisted.single().id)
-                    assertNotNull(persisted.single().source)
-                }
+            } finally {
+                db.close()
+            }
+            val reopened = Room.databaseBuilder(context, ActivityHistoryDatabase::class.java, name)
+                .addMigrations(ActivityHistoryMigration1To2).build()
+            try {
+                val persisted = runBlocking { reopened.entries().page(limit = 50, offset = 0) }
+                assertEquals(1, persisted.size)
+                assertEquals("download:legacy", persisted.single().id)
+                assertNotNull(persisted.single().source)
+            } finally {
+                reopened.close()
+            }
         } finally { context.deleteDatabase(name) }
     }
 }
