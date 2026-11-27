@@ -237,6 +237,8 @@ internal object CiArtifactDownload {
              cancelled: () -> Boolean = { false },
              onProgress: (Long, Long) -> Unit = { _, _ -> }): Saved {
         if (!eligible(run, artifact)) throw IOException("Artifact not current, source-bound or digest-published")
+        val transferId = ActivityTransferJournal.begin(context, "CI:${run.id}:${run.attempt}:${artifact.id}")
+        try {
         // Independent API read at the moment of download prevents stale/run-attempt metadata.
         val current = GitHubEcosystem.freshRun(run, context)
         if (!current || GitHubEcosystem.runArtifacts(run, context).singleOrNull { it.id == artifact.id } != artifact)
@@ -248,7 +250,11 @@ internal object CiArtifactDownload {
         if (dest.exists() || receipt(dest).exists()) throw IOException("CI archive already exists; inspect saved copy")
         val tmp = File.createTempFile(".ci-", ".pending", folder)
         try {
-            val (hash, length) = download(context, artifact.id, tmp, artifact.bytes, cancelled, onProgress)
+            val (hash, length) = download(context, artifact.id, tmp, artifact.bytes, cancelled,
+                { current, total ->
+                    ActivityTransferJournal.progress(context, transferId, current, total)
+                    onProgress(current, total)
+                })
             if (length != artifact.bytes || "sha256:$hash" != artifact.digest)
                 throw IOException("GitHub-published archive SHA-256 or byte size mismatch")
             if (cancelled()) throw InterruptedIOException("CI archive download cancelled")
@@ -272,12 +278,22 @@ internal object CiArtifactDownload {
                 }
                 if (!tmpReceipt.renameTo(receipt(dest))) throw IOException("Cannot finalize CI archive receipt")
             } finally { tmpReceipt.delete() }
+            ActivityTransferJournal.finish(context, transferId, "SUCCEEDED")
             return Saved(dest, run.id, run.attempt, artifact.id, run.headSha, hash, entries.size)
         } catch (failure: Exception) {
             // An interrupted receipt write must not strand an untracked archive.
             if (dest.exists() && !receipt(dest).exists()) dest.delete()
             throw failure
         } finally { tmp.delete() }
+        } catch (failure: Exception) {
+            val verdict = if (failure is java.io.InterruptedIOException) "CANCELLED" else "FAILED"
+            try {
+                ActivityTransferJournal.finish(context, transferId, verdict)
+            } catch (historyFailure: Exception) {
+                failure.addSuppressed(historyFailure)
+            }
+            throw failure
+        }
     }
 
     /** Extract text receipts only. No APK/DEX/ZIP extraction or installer handoff. */

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Pinned-artifact, non-root API36 Android emulator instrumentation for GitHub Actions.
 
-S08 privileged instrumentation remains EXCLUDED. This runner permits exactly one
-fixed JUnit class with no Vector writes. PRs never receive stable signing secrets.
+S08 privileged instrumentation remains EXCLUDED. This runner permits only a fixed inventory of
+non-root JUnit classes with no Vector writes. PRs never receive stable signing secrets.
 """
 from __future__ import annotations
 import argparse
@@ -21,6 +21,13 @@ TEST_PACKAGE = PACKAGE + ".test"
 CLASS = "io.github.mikeyphw.mmrl.lsposed.S09EmulatorUiTest"
 RUNNER = "androidx.test.runner.AndroidJUnitRunner"
 EXPECTED_TEST_COUNT = 4
+NON_ROOT_TESTS = (
+    (CLASS, EXPECTED_TEST_COUNT),
+    ("io.github.mikeyphw.mmrl.lsposed.M1CActivityHistoryPaginationInstrumentedTest", 1),
+    ("io.github.mikeyphw.mmrl.lsposed.M1CActivityPersistenceInstrumentedTest", 1),
+    ("io.github.mikeyphw.mmrl.lsposed.M1CReceiptArchiveInstrumentedTest", 1),
+    ("io.github.mikeyphw.mmrl.lsposed.M1CTransferAttemptHistoryInstrumentedTest", 1),
+)
 REPO = "Mikeyphw/MMRL-LSPosed"
 MAX_APK = 200_000_000
 
@@ -256,8 +263,8 @@ def validated_pair() -> tuple[Path, Path, dict]:
                         'app_sha256':sha(app),'test_sha256':sha(test)}
 
 
-def junit_passed(returncode: int, stdout: str, stderr: str) -> bool:
-    """Android 16 may omit INSTRUMENTATION_CODE; require exact 4-test JUnit success."""
+def junit_passed(returncode: int, stdout: str, stderr: str, expected_count: int = EXPECTED_TEST_COUNT) -> bool:
+    """Android 16 may omit INSTRUMENTATION_CODE; require exact per-class JUnit success."""
     if returncode or any(marker in (stdout+stderr) for marker in (
         'FAILURES!!!', 'INSTRUMENTATION_FAILED', 'INSTRUMENTATION_ABORTED',
         'INSTRUMENTATION_RESULT: shortMsg=', 'INSTRUMENTATION_RESULT: longMsg=',
@@ -266,7 +273,10 @@ def junit_passed(returncode: int, stdout: str, stderr: str) -> bool:
     codes = re.findall(r'(?m)^INSTRUMENTATION_CODE:\s*(-?\d+)\s*$', stdout)
     if codes and codes != ['-1']:
         return False
-    return re.search(rf'(?m)^OK \({EXPECTED_TEST_COUNT} tests\)\s*$', stdout) is not None
+    plural = 'test' if expected_count == 1 else 'tests'
+    matches = re.findall(r'(?m)^OK \((\d+) tests?\)\s*$', stdout)
+    return matches == [str(expected_count)] and re.search(
+        rf'(?m)^OK \({expected_count} {plural}\)\s*$', stdout) is not None
 
 
 def run_emulator(output:Path):
@@ -283,21 +293,35 @@ def run_emulator(output:Path):
         raise ValueError('Android 16 (API36) emulator required')
     run_checked('adb','-s',serial,'install','-r',str(app),timeout=120)
     run_checked('adb','-s',serial,'install','-r','-t',str(test),timeout=120)
-    command=('adb','-s',serial,'shell','am','instrument','-w','-e','class',CLASS,
-             TEST_PACKAGE+'/'+RUNNER)
-    executed=subprocess.run(command,capture_output=True,text=True,timeout=280)
-    log=executed.stdout+('\n=== stderr ===\n'+executed.stderr if executed.stderr else '')
+    reports = []
+    logs = []
+    for test_class, expected_count in NON_ROOT_TESTS:
+        command=('adb','-s',serial,'shell','am','instrument','-w','-e','class',test_class,
+                 TEST_PACKAGE+'/'+RUNNER)
+        try:
+            executed=subprocess.run(command,capture_output=True,text=True,timeout=280)
+            log=executed.stdout+('\n=== stderr ===\n'+executed.stderr if executed.stderr else '')
+            passed=junit_passed(executed.returncode,executed.stdout,executed.stderr,expected_count)
+        except subprocess.TimeoutExpired:
+            log='Instrumentation timeout'
+            passed=False
+        logs.append(f'=== {test_class} ===\n{log}')
+        reports.append({'test_class':test_class,'expected_test_count':expected_count,
+                        'status':'PASS' if passed else 'FAIL'})
+    log='\n'.join(logs)
     (output/'androidtest.log').write_text(log)
-    report={'schema':'mmrl-lsposed.emulator.ui.v1',**identity,'api':36,
-            'test_class':CLASS,'expected_test_count':EXPECTED_TEST_COUNT,
+    all_passed=len(reports)==len(NON_ROOT_TESTS) and all(r['status']=='PASS' for r in reports)
+    total=sum(n for _,n in NON_ROOT_TESTS)
+    report={'schema':'mmrl-lsposed.emulator.ui.v2',**identity,'api':36,
+            'test_classes':reports,'expected_test_count':total,
             'root_required':False,'vector_writes_attempted':0,
             's08_physical_tests_executed':False,
-            'status':'PASS_NON_ROOT_UI' if junit_passed(executed.returncode,executed.stdout,executed.stderr) else 'FAIL_EMULATOR_UI',
+            'status':'PASS_NON_ROOT_UI' if all_passed else 'FAIL_EMULATOR_UI',
             'timestamp':int(time.time())}
     (output/'emulator-report.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
-    if report['status']!='PASS_NON_ROOT_UI':
+    if not all_passed:
         raise ValueError('Emulator JUnit run did not pass: '+log[-650:])
-    print('MMRL_LSPOSED_EMULATOR_UI_PASS', source_label(identity), 'API 36', EXPECTED_TEST_COUNT, 'tests')
+    print('MMRL_LSPOSED_EMULATOR_UI_PASS', source_label(identity), 'API 36', total, 'tests')
 
 
 def source_label(info:dict):return info['source_sha'][:12]

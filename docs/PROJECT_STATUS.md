@@ -172,3 +172,7 @@ R5A returns focus to the app UI. Modules now presents detected-APK counts, safe 
 ## R5C — Discover and Downloads UX source candidate
 
 Based on merged PR #13, commit `d5084c54ba3a260b873397d7d50876d24f421177`. Discover now pages through local filtered/sorted catalog data instead of stopping at 250 entries, and Downloads has independent local filtering for releases, CI runs and selected artifacts. No download or privileged-device security mechanisms changed. Hosted CI and physical UX acceptance are **pending** until the new PR run/device verification; see `docs/R5C_DISCOVER_DOWNLOADS_UX.md`.
+
+## R5D — practical cold-start UX and physical acceptance (source candidate)
+
+After R5C was merged at `bd93bccdcf7533d9f1b730d75d1cadd35317f8b1`, R5D targets two observed source-level usability gaps: unsaved appearance selection across cold starts and Home remaining stuck on Loading after module scan failure. Adds a tiny read-only ADB status/screenshot helper and a physical checklist. No Vector mutation, APK installation, signing, or workflow changes. Local validation/hosted CI/physical acceptance are separate gates; see `docs/R5D_DEVICE_STABILITY.md`.

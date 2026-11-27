@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "repository": "Mikeyphw/MMRL-LSPosed",
+  "base_branch": "main",
+  "event": "pull_request",
+  "release_qualification": "separate",
+  "required_workflows": [
+    {
+      "name": "S01 Standalone Android hosted Devtool",
+      "workflow_id": 406041485
+    },
+    {
+      "name": "R4D Read-only Supply Chain and Qualification (Never Publish)",
+      "workflow_id": 408767555
+    }
+  ]
+}

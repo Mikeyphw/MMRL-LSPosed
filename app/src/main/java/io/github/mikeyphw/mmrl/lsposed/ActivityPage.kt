@@ -33,14 +33,23 @@ internal fun ActivityPage(padding: PaddingValues) {
     var items by remember { mutableStateOf<List<ActivityEntry>>(emptyList()) }
     var error by remember { mutableStateOf(false) }
     var refresh by remember { mutableStateOf(0) }
+    var page by remember { mutableStateOf(0) }
+    var hasMore by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
-    LaunchedEffect(refresh) {
+    LaunchedEffect(refresh, page) {
         loading = true
         val result = withContext(Dispatchers.IO) {
-            runCatching { ActivityHistoryStore.refresh(context.applicationContext) }
+            runCatching { ActivityHistoryStore.refresh(context.applicationContext, page = page, pageSize = 50) }
         }
-        result.onSuccess { items = it; error = false }
-            .onFailure { items = emptyList(); error = true }
+        result.onSuccess { newItems ->
+            items = if (page == 0) newItems else (items + newItems).distinctBy { it.id }
+            hasMore = newItems.size == 50
+            error = false
+        }.onFailure {
+            if (page == 0) items = emptyList()
+            hasMore = false
+            error = true
+        }
         loading = false
     }
     LazyColumn(Modifier.fillMaxSize().padding(padding),
@@ -51,7 +60,7 @@ internal fun ActivityPage(padding: PaddingValues) {
             Text("Read-only local history. A verified hash is not APK signer trust. " +
                 "Pending Vector writes still require explicit reconciliation.",
                 style = MaterialTheme.typography.bodySmall)
-            OutlinedButton(onClick = { refresh++ }, enabled = !loading,
+            OutlinedButton(onClick = { page = 0; refresh++ }, enabled = !loading,
                 modifier = Modifier.testTag("activity_refresh")) { Text("Refresh activity") }
         }
         if (error) item { Text("Activity could not be verified. No record was assumed successful.",
@@ -65,7 +74,14 @@ internal fun ActivityPage(padding: PaddingValues) {
                     Text("${record.kind} · ${record.status}", style = MaterialTheme.typography.titleSmall)
                     Text(record.source, style = MaterialTheme.typography.bodySmall)
                     record.progressPercent?.let { Text("$it%", style = MaterialTheme.typography.labelSmall) }
+                    record.failureCode?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
+            }
+        }
+        if (!loading && hasMore && !error) item {
+            OutlinedButton(onClick = { page += 1 },
+                modifier = Modifier.testTag("activity_load_more")) {
+                Text("Load more history")
             }
         }
     }

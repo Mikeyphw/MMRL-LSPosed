@@ -116,6 +116,8 @@ internal object VerifiedDownload {
             !asset.verifiedDownloadable || !allowedSourceUrl(asset.url) ||
             !ReleaseIdentityPolicy.asset(asset.releaseTag, asset.name, asset.url))
             throw IOException("Unverified or unsupported release asset")
+        val transferId = ActivityTransferJournal.begin(context, "RELEASE")
+        try {
         val root = File(context.filesDir, "verified-downloads")
         if (!root.isDirectory && !root.mkdirs()) throw IOException("Cannot create verified downloads directory")
         val expected = digest.removePrefix("sha256:")
@@ -124,6 +126,7 @@ internal object VerifiedDownload {
             if (safeSavedFile(root, destination) && destination.length() == asset.size &&
                 sha256(destination) == expected) {
                 writeReceipt(destination, expected, asset)
+                ActivityTransferJournal.finish(context, transferId, "SUCCEEDED")
                 return destination
             }
             throw IOException("Existing download differs; refusing replacement")
@@ -168,6 +171,7 @@ internal object VerifiedDownload {
                                     throw IOException("Release download exceeded verified size")
                                 sha.update(buf, 0, len)
                                 file.write(buf, 0, len)
+                                ActivityTransferJournal.progress(context, transferId, count, asset.size)
                                 onProgress(count, asset.size)
                             }
                         }
@@ -178,10 +182,20 @@ internal object VerifiedDownload {
                     if (!hasZipHeader(temp)) throw IOException("Release asset is not an APK/ZIP archive")
                     if (!temp.renameTo(destination)) throw IOException("Cannot finalize verified release")
                     writeReceipt(destination, expected, asset)
+                    ActivityTransferJournal.finish(context, transferId, "SUCCEEDED")
                     return destination
                 } finally { connection.disconnect() }
             }
         } finally { temp.delete() }
+        } catch (failure: Exception) {
+            val verdict = if (failure is java.io.InterruptedIOException) "CANCELLED" else "FAILED"
+            try {
+                ActivityTransferJournal.finish(context, transferId, verdict)
+            } catch (historyFailure: Exception) {
+                failure.addSuppressed(historyFailure)
+            }
+            throw failure
+        }
     }
 
     private fun writeReceipt(file: File, hash: String, asset: GitHubEcosystem.Asset) {
