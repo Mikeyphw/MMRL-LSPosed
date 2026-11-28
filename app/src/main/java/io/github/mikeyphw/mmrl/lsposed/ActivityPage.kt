@@ -36,6 +36,8 @@ internal fun ActivityPage(padding: PaddingValues) {
     var page by remember { mutableStateOf(0) }
     var hasMore by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
+    var queue by remember { mutableStateOf<List<QueueEntry>>(emptyList()) }
+    var queueUnavailable by remember { mutableStateOf(false) }
     LaunchedEffect(refresh, page) {
         loading = true
         val result = withContext(Dispatchers.IO) {
@@ -50,6 +52,9 @@ internal fun ActivityPage(padding: PaddingValues) {
             hasMore = false
             error = true
         }
+        withContext(Dispatchers.IO) { runCatching { AppTransferQueue.get(context.applicationContext).snapshot() } }
+            .onSuccess { queue = it; queueUnavailable = false }
+            .onFailure { queue = emptyList(); queueUnavailable = true }
         loading = false
     }
     LazyColumn(Modifier.fillMaxSize().padding(padding),
@@ -65,6 +70,12 @@ internal fun ActivityPage(padding: PaddingValues) {
         }
         if (error) item { Text("Activity could not be verified. No record was assumed successful.",
             color = MaterialTheme.colorScheme.error) }
+        if (queueUnavailable) item { Text("Queue status unavailable", color = MaterialTheme.colorScheme.error) }
+        if (queue.isNotEmpty()) item { Text("Download queue · read-only", style = MaterialTheme.typography.titleMedium) }
+        items(queue, key = { "queue-${it.id}" }) { entry ->
+            Text("${entry.source.name} · ${entry.state.name} · attempt ${entry.attempt}/3", style = MaterialTheme.typography.bodySmall)
+            if (entry.activityId.isNotEmpty()) Text("Linked attempt: ${entry.activityId}", style = MaterialTheme.typography.labelSmall)
+        }
         if (loading) item { Text("Reading local receipts…") }
         if (!loading && items.isEmpty() && !error) item { Text("No recorded activity") }
         items(items, key = { it.id }) { record ->
@@ -73,6 +84,7 @@ internal fun ActivityPage(padding: PaddingValues) {
                     verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("${record.kind} · ${record.status}", style = MaterialTheme.typography.titleSmall)
                     Text(record.source, style = MaterialTheme.typography.bodySmall)
+                    Text(record.id, style = MaterialTheme.typography.labelSmall)
                     record.progressPercent?.let { Text("$it%", style = MaterialTheme.typography.labelSmall) }
                     record.failureCode?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }

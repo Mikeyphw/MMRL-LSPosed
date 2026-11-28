@@ -64,7 +64,7 @@ internal object TransferPublicationCases {
             is TransferCancelled)
         check(out.size() == 0)
         val timeout = publicTransferFailure(SocketTimeoutException("signed?secret=fixture"))
-        check(timeout is TransferRefused && "secret" !in timeout.message.orEmpty())
+        check(timeout is TransferRetryable && timeout.failure == io.github.mikeyphw.mmrl.shared.TransferFailure.TIMEOUT && "secret" !in timeout.message.orEmpty())
         check(publicTransferFailure(TransferCancelled()) is TransferCancelled)
         check("private" !in publicTransferFailure(IOException("private/path")).message.orEmpty())
     }

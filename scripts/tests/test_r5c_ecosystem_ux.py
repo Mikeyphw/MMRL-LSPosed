@@ -22,12 +22,14 @@ class R5CEcosystemUxTests(unittest.TestCase):
         self.assertNotIn('results.take(250)', self.src)
 
     def test_saved_download_authority_is_not_changed(self):
-        self.assertIn('VerifiedDownload.save(context.applicationContext, asset,', self.src)
+        self.assertIn('queueAction { it.enqueue(AppTransferQueue.release(asset)) }', self.src)
+        self.assertIn('VerifiedDownload.save(app, releaseAsset(source),', (SRC/'AppTransferQueue.kt').read_text())
         self.assertIn('VerifiedDownload.recheckSaved(context.applicationContext, selected)', self.src)
         self.assertIn('CiArtifactDownload.eligible(active, artifact)', self.src)
-        self.assertIn('CiArtifactDownload.save(context.applicationContext, active, artifact,', self.src)
+        self.assertIn('queueAction { it.enqueue(AppTransferQueue.ci(active, artifact)) }', self.src)
+        self.assertIn('CiArtifactDownload.save(app, ciRun(source), ciArtifact(source),', (SRC/'AppTransferQueue.kt').read_text())
         self.assertIn('CiArtifactDownload.extractEvidence(context.applicationContext, entry)', self.src)
-        self.assertIn('cancelSignal.set(true)', self.src)
+        self.assertIn('queueAction { it.cancel(row.id) }', self.src)
         self.assertIn('No APK installation', self.src.replace('no APK installation', 'No APK installation'))
 
     def test_local_search_is_not_network_search(self):

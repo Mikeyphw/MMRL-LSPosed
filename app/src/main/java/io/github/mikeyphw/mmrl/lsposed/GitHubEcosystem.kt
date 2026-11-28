@@ -204,6 +204,7 @@ internal object GitHubEcosystem {
         }
         try {
             val status = connection.responseCode
+            if (status in setOf(408, 429, 500, 502, 503, 504)) throw transferHttpFailure(status, connection.getHeaderField("Retry-After"))
             if (status != 200) throw IOException(when (status) {
                 401 -> "GitHub authentication rejected (HTTP 401). Remove or replace the token in Settings."
                 403, 429 -> "GitHub API rate limit or permission denied (HTTP $status)."

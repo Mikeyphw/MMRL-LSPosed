@@ -2,7 +2,6 @@ package io.github.mikeyphw.mmrl.lsposed
 
 import android.content.Context
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -110,7 +109,8 @@ internal object VerifiedDownload {
 
     fun save(context: Context, asset: GitHubEcosystem.Asset,
              cancelled: () -> Boolean = { false },
-             onProgress: (Long, Long) -> Unit = { _, _ -> }): File {
+             onProgress: (Long, Long) -> Unit = { _, _ -> },
+             resumeId: String? = null, onStarted: (String) -> Unit = {}): File {
         val digest = asset.digest?.let(Sha256Digest::parse)
             ?: throw TransferRefused("No published SHA-256; use GitHub instead")
         if (!asset.verifiedDownloadable || !allowedSourceUrl(asset.url) ||
@@ -119,6 +119,7 @@ internal object VerifiedDownload {
         val transferId = try { ActivityTransferJournal.begin(context, "RELEASE") }
             catch (failure: Exception) { throw publicTransferFailure(failure) }
         try {
+            onStarted(transferId)
             TransferPublication.checkCancelled(cancelled)
             if (!GitHubEcosystem.freshReleaseAsset(asset, context))
                 throw TransferRefused("Release asset metadata changed; reload GitHub")
@@ -145,53 +146,61 @@ internal object VerifiedDownload {
             if (TransferPublication.exists(destination)) {
                 publish(null)
             } else {
-                if (root.usableSpace < asset.size) throw TransferRefused("Not enough storage for download")
-                val temp = File.createTempFile(".download-", ".pending", root)
+                val stage = ResumableTransfer.create(root, resumeId,
+                    "release:${asset.releaseTag}:${asset.name}:${asset.size}:${digest.hex}", asset.name, asset.size, digest)
                 try {
-                    var url = URL(asset.url)
-                    var redirects = 0
+                    var restarts = 0
                     while (true) {
-                        TransferPublication.checkCancelled(cancelled)
-                        if (url.protocol != "https" || url.host !in redirectHosts || url.port != -1 ||
-                            url.userInfo != null || url.ref != null)
-                            throw TransferRefused("Download redirected outside trusted HTTPS hosts")
-                        val connection = (url.openConnection() as HttpURLConnection).apply {
-                            connectTimeout = 10_000
-                            readTimeout = 15_000
-                            instanceFollowRedirects = false
-                            setRequestProperty("User-Agent", "MMRL-LSPosed/0.1")
-                            setRequestProperty("Accept-Encoding", "identity")
-                        }
                         try {
-                            val code = connection.responseCode
-                            TransferPublication.checkCancelled(cancelled)
-                            if (code in listOf(301, 302, 303, 307, 308)) {
-                                if (++redirects > 4) throw TransferRefused("Too many release redirects")
-                                val location = connection.getHeaderField("Location")
-                                    ?: throw TransferRefused("Missing release redirect location")
-                                url = URL(url, location)
-                                continue
-                            }
-                            if (code != 200) throw TransferRefused("Release download HTTP $code")
-                            FileOutputStream(temp).use { file ->
-                                connection.inputStream.use { input ->
-                                    TransferPublication.copyExact(input, file, asset.size,
-                                        connection.contentLengthLong, connection.contentEncoding, cancelled) { count, total ->
+                            var url = URL(asset.url)
+                            var redirects = 0
+                            while (true) {
+                                TransferPublication.checkCancelled(cancelled)
+                                if (url.protocol != "https" || url.host !in redirectHosts || url.port != -1 ||
+                                    url.userInfo != null || url.ref != null)
+                                    throw TransferRefused("Download redirected outside trusted HTTPS hosts")
+                                val connection = (url.openConnection() as HttpURLConnection).apply {
+                                    connectTimeout = 10_000
+                                    readTimeout = 15_000
+                                    instanceFollowRedirects = false
+                                    setRequestProperty("User-Agent", "MMRL-LSPosed/0.1")
+                                    setRequestProperty("Accept-Encoding", "identity")
+                                }
+                                try {
+                                    stage.prepareConnection(connection)
+                                    val code = connection.responseCode
+                                    TransferPublication.checkCancelled(cancelled)
+                                    if (code in listOf(301, 302, 303, 307, 308)) {
+                                        if (++redirects > 4) throw TransferRefused("Too many release redirects")
+                                        val location = connection.getHeaderField("Location")
+                                            ?: throw TransferRefused("Missing release redirect location")
+                                        url = URL(url, location)
+                                        continue
+                                    }
+                                    if (code !in setOf(200, 206, 416)) throw transferHttpFailure(code, connection.getHeaderField("Retry-After"))
+                                    stage.copyResponse(connection.url.host.lowercase(java.util.Locale.ROOT), code, connection.getHeaderField("Content-Range"), connection.contentLengthLong,
+                                        connection.contentEncoding, connection.getHeaderField("ETag"), { connection.inputStream }, cancelled) { count, total ->
                                         ActivityTransferJournal.progress(context, transferId, count, total)
                                         onProgress(count, total)
                                     }
-                                }
-                                file.fd.sync()
+                                    break
+                                } finally { connection.disconnect() }
                             }
-                            if (!hasZipHeader(temp)) throw TransferRefused("Release asset is not an APK/ZIP archive")
                             break
-                        } finally { connection.disconnect() }
+                        } catch (_: RestartTransfer) {
+                            if (++restarts > 1 || !GitHubEcosystem.freshReleaseAsset(asset, context))
+                                throw TransferRefused("Release range or identity changed; reload GitHub")
+                        }
                     }
                     TransferPublication.checkCancelled(cancelled)
                     if (!GitHubEcosystem.freshReleaseAsset(asset, context))
                         throw TransferRefused("Release asset metadata changed during transfer")
-                    publish(temp)
-                } finally { temp.delete() }
+                    publish(stage.file)
+                    stage.discard()
+                } catch (failure: Exception) {
+                    try { stage.retainAfter(failure, resumeId != null) } catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
+                    throw failure
+                }
             }
             ActivityTransferJournal.finish(context, transferId, "SUCCEEDED")
             return destination

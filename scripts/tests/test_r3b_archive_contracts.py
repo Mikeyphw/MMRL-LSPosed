@@ -27,7 +27,7 @@ class R3BContracts(unittest.TestCase):
                        'inspection.currentAttempt && inspection.eventCompatible',
                        'Sha256Digest.parse(requireNotNull(artifact.digest))',
                        'TransferPublication.verify(folder, input, artifact.bytes, digest)',
-                       'TransferPublication.copyExact(input, output, limit, conn.contentLengthLong,',
+                       'stage.copyResponse(conn.url.host.lowercase(java.util.Locale.ROOT), code, conn.getHeaderField("Content-Range"), conn.contentLengthLong,',
                        'TransferPublication.publish(folder, tmp, dest, artifact.bytes, digest,',
                        'artifact.expired', 'published_digest', 'independently_attested'):
             self.assertIn(needle,s)

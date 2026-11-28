@@ -79,8 +79,8 @@ class FeaturesContracts(unittest.TestCase):
         download = self.read('VerifiedDownload.kt')
         for s in ('allowedSourceUrl(url: String)', 'allowedName(name: String)',
                   'Sha256Digest::parse', 'TransferPublication.publish(root, stage, destination, asset.size, digest,',
-                  'TransferPublication.copyExact(input, file, asset.size,', 'MAX_BYTES = 104_857_600L',
-                  'Too many release redirects', 'Downloaded', 'temp.delete()',
+                  'stage.copyResponse(connection.url.host.lowercase(java.util.Locale.ROOT), code, connection.getHeaderField("Content-Range"), connection.contentLengthLong,', 'MAX_BYTES = 104_857_600L',
+                  'Too many release redirects', 'Downloaded', 'stage.discard()',
                   'Cancelled'):
             # Allow case-insensitive descriptive code while checking hard invariants below.
             if s in ('Downloaded', 'Cancelled'):
@@ -92,7 +92,7 @@ class FeaturesContracts(unittest.TestCase):
             self.assertIn(needle, publication)
         self.assertIn('failure is TransferCancelled', download)
         self.assertNotIn('.renameTo(', download)
-        self.assertIn('file.fd.sync()', download)
+        self.assertIn('output.fd.sync()', self.read('ResumableTransfer.kt'))
         self.assertIn('fun listSaved(', download)
         self.assertIn('receipt.json', download)
         self.assertNotIn('Runtime.getRuntime()', download)
@@ -126,12 +126,16 @@ class FeaturesContracts(unittest.TestCase):
         self.assertIn('GitHubEcosystem.releases(context.applicationContext)', ui)
         self.assertIn('GitHubEcosystem.recentRuns(context.applicationContext)', ui)
         self.assertNotIn(' as List<GitHubEcosystem.', ui)
-        self.assertIn('val cancelSignal = remember { AtomicBoolean(false) }', ui)
-        self.assertIn('DisposableEffect(Unit) { onDispose { cancelSignal.set(true) } }', ui)
-        self.assertIn('cancelled = { cancelSignal.get() }', ui)
-        self.assertIn('cancelSignal.set(true); cancelRequested = true', ui)
-        self.assertIn('lastPercent = percent', ui)
-        self.assertIn('coroutine.launch { progress = percent }', ui)
+        self.assertIn('queueAction { it.cancel(row.id) }', ui)
+        self.assertIn('queueAction { it.retry(row.id) }', ui)
+        self.assertIn('while (isActive)', ui)
+        self.assertIn('AppTransferQueue.get(context.applicationContext).snapshot()', ui)
+        self.assertNotIn('DisposableEffect(Unit) { onDispose { cancelSignal.set(true) } }', ui)
+        queue = self.read('DurableTransferQueue.kt')
+        self.assertIn('while (running.size < 2)', queue)
+        self.assertIn('QueueStatus.CANCELLING', queue)
+        self.assertIn('running[id]?.set(true)', queue)
+        self.assertIn('it.copy(state = QueueStatus.INTERRUPTED', queue)
         self.assertIn('archives can predate reruns', ui)
 
     def test_emulator_interacts_with_offline_feature_states(self):

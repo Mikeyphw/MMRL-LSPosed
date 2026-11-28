@@ -169,8 +169,8 @@ internal object CiArtifactDownload {
     }
 
     /** A token is used only against api.github.com; never forwarded to the 302 URL. */
-    private fun download(context: Context, id: Long, target: File,
-                         limit: Long, cancelled: () -> Boolean, progress: (Long, Long) -> Unit) {
+    private fun download(context: Context, id: Long, stage: ResumableTransfer,
+                         cancelled: () -> Boolean, progress: (Long, Long) -> Unit) {
         TransferPublication.checkCancelled(cancelled)
         val token = try { LocalSettings.gitHubToken(context) }
             catch (_: Exception) { throw TransferRefused("GitHub token unavailable; update Settings") }
@@ -191,7 +191,7 @@ internal object CiArtifactDownload {
                 302 -> initial.getHeaderField("Location") ?: throw TransferRefused("GitHub omitted download location")
                 401, 403 -> throw TransferRefused("GitHub Actions access denied; check token Actions: read permission")
                 410 -> throw TransferRefused("CI artifact expired")
-                else -> throw TransferRefused("GitHub artifact archive unavailable")
+                else -> throw transferHttpFailure(code, initial.getHeaderField("Retry-After"))
             }
         } finally { initial.disconnect() }
         if (!allowedStorageRedirect(redirect)) throw TransferRefused("Unexpected GitHub artifact storage host")
@@ -204,14 +204,11 @@ internal object CiArtifactDownload {
             // NEVER forward token or signed URL to logs, receipts or other hosts.
         }
         try {
-            if (conn.responseCode != 200) throw TransferRefused("CI archive storage unavailable")
-            FileOutputStream(target).use { output ->
-                conn.inputStream.use { input ->
-                    TransferPublication.copyExact(input, output, limit, conn.contentLengthLong,
-                        conn.contentEncoding, cancelled, progress)
-                }
-                output.fd.sync()
-            }
+            stage.prepareConnection(conn)
+            val code = conn.responseCode
+            if (code !in setOf(200, 206, 416)) throw transferHttpFailure(code, conn.getHeaderField("Retry-After"))
+            stage.copyResponse(conn.url.host.lowercase(java.util.Locale.ROOT), code, conn.getHeaderField("Content-Range"), conn.contentLengthLong, conn.contentEncoding,
+                conn.getHeaderField("ETag"), { conn.inputStream }, cancelled, progress)
         } finally { conn.disconnect() }
     }
 
@@ -223,27 +220,38 @@ internal object CiArtifactDownload {
 
     fun save(context: Context, run: GitHubEcosystem.Run, artifact: GitHubEcosystem.Artifact,
              cancelled: () -> Boolean = { false },
-             onProgress: (Long, Long) -> Unit = { _, _ -> }): Saved {
+             onProgress: (Long, Long) -> Unit = { _, _ -> },
+             resumeId: String? = null, onStarted: (String) -> Unit = {}): Saved {
         if (!eligible(run, artifact)) throw TransferRefused("Artifact not current, source-bound or digest-published")
         val digest = requireNotNull(Sha256Digest.parse(requireNotNull(artifact.digest)))
         val transferId = try { ActivityTransferJournal.begin(context, "CI:${run.id}:${run.attempt}:${artifact.id}") }
             catch (failure: Exception) { throw publicTransferFailure(failure) }
         try {
+            onStarted(transferId)
             TransferPublication.checkCancelled(cancelled)
             if (!freshArtifact(context, run, artifact))
                 throw TransferRefused("Run attempt or artifact metadata changed; reload GitHub")
             val folder = root(context)
             TransferPublication.prepare(folder)
             val dest = File(folder, filename(run, artifact))
-            val tmp = if (TransferPublication.exists(dest)) null else {
-                if (folder.usableSpace < artifact.bytes) throw TransferRefused("Not enough storage for CI archive")
-                File.createTempFile(".ci-", ".pending", folder)
-            }
+            val stage = if (TransferPublication.exists(dest)) null else ResumableTransfer.create(folder, resumeId,
+                "ci:${run.id}:${run.attempt}:${run.headSha}:${run.event}:${artifact.id}:${artifact.name}:${artifact.bytes}:${digest.hex}",
+                "${artifact.name}.zip", artifact.bytes, digest)
+            val tmp = stage?.file
             try {
-                if (tmp != null) {
-                    download(context, artifact.id, tmp, artifact.bytes, cancelled) { current, total ->
-                        ActivityTransferJournal.progress(context, transferId, current, total)
-                        onProgress(current, total)
+                if (stage != null) {
+                    var restarts = 0
+                    while (true) {
+                        try {
+                            download(context, artifact.id, stage, cancelled) { current, total ->
+                                ActivityTransferJournal.progress(context, transferId, current, total)
+                                onProgress(current, total)
+                            }
+                            break
+                        } catch (_: RestartTransfer) {
+                            if (++restarts > 1 || !freshArtifact(context, run, artifact))
+                                throw TransferRefused("Artifact range or identity changed; reload GitHub")
+                        }
                     }
                     TransferPublication.checkCancelled(cancelled)
                     if (!freshArtifact(context, run, artifact))
@@ -281,9 +289,13 @@ internal object CiArtifactDownload {
                     }.getOrDefault(false) }, cancelled)
                 val saved = Saved(dest, run.id, run.attempt, artifact.id, run.headSha, hash, entries.size)
                 if (!recheckSaved(context, saved)) throw TransferRefused("CI archive receipt read-back failed")
+                stage?.discard()
                 ActivityTransferJournal.finish(context, transferId, "SUCCEEDED")
                 return saved
-            } finally { tmp?.delete() }
+            } catch (failure: Exception) {
+                try { stage?.retainAfter(failure, resumeId != null) } catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
+                throw failure
+            }
         } catch (failure: Exception) {
             val verdict = if (failure is TransferCancelled) "CANCELLED" else "FAILED"
             try { ActivityTransferJournal.finish(context, transferId, verdict) }

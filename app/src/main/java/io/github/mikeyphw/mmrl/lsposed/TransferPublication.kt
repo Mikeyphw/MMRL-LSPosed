@@ -15,12 +15,28 @@ import java.nio.file.LinkOption.NOFOLLOW_LINKS
 /** Only explicit user cancellation has this type; SocketTimeoutException is a failure. */
 internal class TransferCancelled : IOException("Download cancelled; no incomplete file was published")
 internal class TransferRefused(message: String) : IOException(message)
+internal class TransferRetryable(val failure: io.github.mikeyphw.mmrl.shared.TransferFailure,
+                                 val retryAfterMillis: Long? = null) : IOException("Transient transfer failure: ${failure.name}") {
+    init { require(failure.retryable) }
+}
+internal fun transferHttpFailure(status: Int, retryAfter: String?): IOException {
+    val failure = io.github.mikeyphw.mmrl.shared.TransferFailurePolicy.http(status)
+    val delay = retryAfter?.let { raw ->
+        raw.toLongOrNull()?.let { if (it in 0..60) it * 1000 else Long.MAX_VALUE }
+            ?: runCatching {
+                val target = java.time.ZonedDateTime.parse(raw, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
+                (target - System.currentTimeMillis()).coerceAtLeast(0L)
+            }.getOrDefault(Long.MAX_VALUE)
+    }
+    return if (failure?.retryable == true) TransferRetryable(failure, delay) else TransferRefused("Download HTTP $status")
+}
 
 /** The UI must never receive exception messages from a socket, signed URL or private path. */
 internal fun publicTransferFailure(error: Exception): IOException = when (error) {
-    is TransferCancelled, is TransferRefused -> error as IOException
-    is java.net.SocketTimeoutException -> TransferRefused("Download timed out; retry when the connection is stable")
-    is java.net.UnknownHostException -> TransferRefused("Download host unavailable; check the connection")
+    is TransferCancelled, is TransferRefused, is TransferRetryable -> error as IOException
+    is java.net.SocketTimeoutException -> TransferRetryable(io.github.mikeyphw.mmrl.shared.TransferFailure.TIMEOUT)
+    is java.net.UnknownHostException, is java.net.ConnectException -> TransferRetryable(io.github.mikeyphw.mmrl.shared.TransferFailure.OFFLINE)
+    is java.net.SocketException -> TransferRetryable(io.github.mikeyphw.mmrl.shared.TransferFailure.HTTP_TRANSIENT)
     else -> TransferRefused("Download or storage operation failed; inspect saved downloads and retry")
 }
 
