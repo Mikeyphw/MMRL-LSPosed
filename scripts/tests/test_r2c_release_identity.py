@@ -33,7 +33,7 @@ class ReleaseIdentityContracts(unittest.TestCase):
                      'safeSavedFile(root, file)', 'sha256(file) != hash',
                      '!Files.isSymbolicLink(file.toPath())',
                      'ReleaseIdentityPolicy.asset(asset.releaseTag, asset.name, asset.url)',
-                     'hasZipHeader(temp)', 'temp.delete()'):
+                     'publish(stage.file)', 'stage.discard()'):
             self.assertIn(frag, code)
         self.assertNotIn('Runtime.getRuntime()', code)
         self.assertNotIn('su -c', code)
@@ -45,7 +45,8 @@ class ReleaseIdentityContracts(unittest.TestCase):
         self.assertIn('Saved file or receipt changed', ui)
         self.assertIn('Legacy hash-only receipt', ui)
         self.assertIn('signing certificate are NOT qualified', ui)
-        self.assertIn('saved = VerifiedDownload.Saved(file,', ui)
+        self.assertIn('AppTransferQueue.findRelease(context.applicationContext, row)', ui)
+        self.assertIn('else saved = found', ui)
         self.assertIn('FileProvider.getUriForFile', ui)
         self.assertNotIn('VectorMutation.change(', ui)
 

@@ -71,6 +71,97 @@ class EmulatorGateContracts(unittest.TestCase):
             with self.subTest(rc=rc,stdout=stdout,stderr=stderr):
                 self.assertFalse(ci.junit_passed(rc,stdout,stderr))
 
+    def test_activity_classes_have_exact_counts_and_nonroot_scope(self):
+        self.assertEqual(len(ci.NON_ROOT_TESTS), 5)
+        self.assertEqual(sum(n for _, n in ci.NON_ROOT_TESTS), 8)
+        self.assertEqual(ci.NON_ROOT_TESTS[0], (ci.CLASS, 4))
+        for name, count in ci.NON_ROOT_TESTS:
+            path=ROOT/'app/src/androidTest/java'/Path(*name.split('.')).with_suffix('.kt')
+            source=path.read_text()
+            self.assertEqual(source.count('@Test fun '), count)
+            for term in ('VectorMutation.change(', 'RootService.bind(', 'S08LabWriteDeviceTest('):
+                self.assertNotIn(term, source)
+        self.assertTrue(ci.junit_passed(0, 'OK (1 test)\n', '', 1))
+        self.assertFalse(ci.junit_passed(0, 'OK (4 tests)\n', '', 1))
+        self.assertFalse(ci.junit_passed(0, 'OK (1 test)\nOK (1 test)\n', '', 1))
+
+    def test_room_migration_instrumentation_uses_explicit_database_lifecycle(self):
+        # S01 run 46031858111: RoomDatabase is not a Closeable receiver.
+        # Retain both actual migration/reopen assertions and close before deletion.
+        src=(ROOT/'app/src/androidTest/java/io/github/mikeyphw/mmrl/lsposed/M1CActivityPersistenceInstrumentedTest.kt').read_text()
+        self.assertNotRegex(src, r'\.build\(\)\s*\.use\b')
+        self.assertRegex(src, r'finally\s*\{\s*db\.close\(\)\s*\}')
+        self.assertRegex(src, r'finally\s*\{\s*reopened\.close\(\)\s*\}')
+        self.assertEqual(src.count('.addMigrations(ActivityHistoryMigration1To2).build()'),2)
+        self.assertIn('SQLiteDatabase.openOrCreateDatabase(file, null).use',src)
+        self.assertIn('db.version = 1',src)
+        self.assertIn('db.entries().saveHistory(',src)
+        self.assertIn('reopened.entries().page(limit = 50, offset = 0)',src)
+        self.assertLess(src.index('db.close()'),src.index('val reopened ='))
+        self.assertLess(src.index('reopened.close()'),src.index('context.deleteDatabase(name)'))
+
+    def test_activity_receipts_preserve_supplied_storage_context(self):
+        # S01 run 46036580655: instrumentation Context.applicationContext
+        # is null. Do not redirect package-private preferences or files.
+        root = ROOT / 'app/src/main/java/io/github/mikeyphw/mmrl/lsposed'
+        journal = (root / 'ActivityTransferJournal.kt').read_text()
+        capture = (root / 'ActivityReceiptCapture.kt').read_text()
+        self.assertNotIn('context.applicationContext', journal)
+        self.assertNotIn('context.applicationContext', capture)
+        self.assertIn('context.getSharedPreferences(FILE, Context.MODE_PRIVATE)', journal)
+        self.assertEqual(capture.count('ActivityReceiptArchive.append(context.filesDir, receipt)'), 2)
+        self.assertIn('ActivityReceiptArchive.read(context.filesDir)', capture)
+        test = (ROOT / 'app/src/androidTest/java/io/github/mikeyphw/mmrl/lsposed/M1CTransferAttemptHistoryInstrumentedTest.kt').read_text()
+        self.assertIn('InstrumentationRegistry.getInstrumentation().targetContext', test)
+        self.assertNotIn('InstrumentationRegistry.getInstrumentation().context', test)
+        self.assertIn('assertEquals(target.applicationInfo.uid, Process.myUid())', test)
+        self.assertIn('val nonce = UUID.randomUUID().toString()', test)
+        self.assertIn('val name = "m1c-transfer-test-$nonce"', test)
+        self.assertIn('val directory = File(target.cacheDir, name)', test)
+        self.assertIn('object : ContextWrapper(target)', test)
+        self.assertIn('override fun getApplicationContext(): Context = this', test)
+        self.assertIn('override fun getFilesDir(): File = directory', test)
+        self.assertIn('return target.getSharedPreferences(name, mode)', test)
+        self.assertIn('prefs.edit().putString("probe", nonce).commit()', test)
+        self.assertIn('assertTrue(prefs.edit().clear().commit())', test)
+        self.assertIn('assertTrue(target.deleteSharedPreferences(name))', test)
+        self.assertIn('assertTrue(directory.deleteRecursively())', test)
+        self.assertIn('!prefs(context).edit().putString(KEY, encoded).commit()', journal)
+        self.assertNotIn('target.getSharedPreferences("activity_transfer_ledger_v1"', test)
+        self.assertIn('assertTrue(archive.isFile)', test)
+        self.assertIn('prefs.getString("entries", "[]")!!.contains(first)', test)
+        self.assertIn('prefs.getString("entries", "[]")!!.contains(second)', test)
+        self.assertIn('assertEquals("TRANSFER_FAILED", failed.failure)', test)
+        self.assertIn('assertEquals(100, successful.percent)', test)
+
+    def test_all_allowlisted_classes_are_executed_and_any_failure_blocks(self):
+        identity={'source_sha':'a'*40,'run_id':1,'attempt':1,'event':'pull_request',
+                  'app_sha256':'b'*64,'test_sha256':'c'*64}
+        for fail in (False, True):
+            with tempfile.TemporaryDirectory() as td:
+                calls=[]
+                def execute(args, **kwargs):
+                    name=args[args.index('class')+1]
+                    calls.append(name)
+                    count=dict(ci.NON_ROOT_TESTS)[name]
+                    output=f'OK ({count} {"test" if count == 1 else "tests"})\n'
+                    if fail and name==ci.NON_ROOT_TESTS[-1][0]: output='OK (0 tests)\n'
+                    return SimpleNamespace(returncode=0,stdout=output,stderr='')
+                def checked(*args, **kwargs):
+                    if args==('adb','devices'): return SimpleNamespace(stdout='List of devices attached\nemulator-5554\tdevice\n')
+                    if 'getprop' in args: return SimpleNamespace(stdout='36\n')
+                    return SimpleNamespace(stdout='Success\n')
+                with (patch.object(ci,'validated_pair',return_value=(Path('a.apk'),Path('b.apk'),identity)),
+                      patch.object(ci,'run_checked',side_effect=checked),
+                      patch.object(ci.subprocess,'run',side_effect=execute)):
+                    if fail:
+                        with self.assertRaisesRegex(ValueError,'did not pass'): ci.run_emulator(Path(td))
+                    else: ci.run_emulator(Path(td))
+                self.assertEqual(calls,[name for name,_ in ci.NON_ROOT_TESTS])
+                report=json.loads((Path(td)/'emulator-report.json').read_text())
+                self.assertEqual(report['expected_test_count'],8)
+                self.assertEqual(report['status'],'FAIL_EMULATOR_UI' if fail else 'PASS_NON_ROOT_UI')
+
     def test_source_identity_required_and_no_secret_pr(self):
         good={'GITHUB_REPOSITORY':ci.REPO,'GITHUB_ACTIONS':'true','GITHUB_SHA':'a'*40,
               'GITHUB_RUN_ID':'1234','GITHUB_RUN_ATTEMPT':'1','GITHUB_EVENT_NAME':'pull_request'}
@@ -89,7 +180,7 @@ class EmulatorGateContracts(unittest.TestCase):
 
     def test_verifier_does_not_invoke_root_or_vector(self):
         src=(ROOT/'scripts/ci_emulator.py').read_text()
-        self.assertIn("'shell','am','instrument','-w','-e','class',CLASS",src)
+        self.assertIn("'shell','am','instrument','-w','-e','class',test_class",src)
         self.assertIn("'root_required':False",src)
         self.assertIn("'s08_physical_tests_executed':False",src)
         self.assertIn("'vector_writes_attempted':0",src)

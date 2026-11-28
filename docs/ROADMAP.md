@@ -297,3 +297,7 @@ Defer R4D-02 and later multi-scope SBOM/provenance infrastructure. Maintain exis
 ## R5C — Discover and Downloads everyday UX (candidate; hosted/device acceptance pending)
 
 After R5A Modules and R5B Scope Editor, R5C adds progressive local catalog browsing, resettable searches and metadata-aware Downloads/CI artifact filtering, without new networking or release qualification layers. See `docs/R5C_DISCOVER_DOWNLOADS_UX.md`. Next: R5D real-device visual acceptance and targeted stability fixes. R4D-02 multi-scope provenance is deferred, not required for this UI work.
+
+## R5D — physical UX acceptance and focused cold-start fixes
+
+After merged R5C, retain the R5A/B/C product refinements and fix two concrete stability gaps: persist appearance after process restart; show a real Home module-scan failure with manual retry. Provide only an optional, non-root ADB status/screenshot capture helper for the physical review. Do not add release framework or implicit device writes. Hosted Android tests and trusted-main signing must succeed; physical screenshots and cold-start UX need separate manual acceptance. See `docs/R5D_DEVICE_STABILITY.md`.

@@ -6,6 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.json.JSONObject
+import org.json.JSONArray
 
 /** Pure JVM tests; no root, APK install, GitHub requests or filesystem writes. */
 class R2CReleaseIdentityTest {
@@ -70,5 +71,26 @@ class R2CReleaseIdentityTest {
         assertEquals("", VerifiedDownload.receiptTag(old, stored, hash, 4096))
         assertNull(VerifiedDownload.receiptTag(old.put("release_tag", tag), stored, hash, 4096))
         assertNull(VerifiedDownload.receiptTag(old.put("schema", "mmrl-lsposed.release-asset-receipt.v2"), stored, hash, 4096))
+    }
+
+    @Test fun freshReleaseAssetRejectsStaleAndSubstitutedMetadata() {
+        val digest = "sha256:$hash"
+        val selected = GitHubEcosystem.Asset(filename, 4096, digest, url, tag)
+        fun asset() = JSONObject().put("name", filename).put("size", 4096)
+            .put("digest", digest).put("browser_download_url", url).put("state", "uploaded")
+        fun release(item: JSONObject = asset()) = JSONObject().put("draft", false)
+            .put("prerelease", false).put("tag_name", tag)
+            .put("html_url", "https://github.com/Mikeyphw/MMRL-LSPosed/releases/tag/$tag")
+            .put("assets", JSONArray().put(item))
+        assertTrue(GitHubEcosystem.releaseContainsAsset(selected, release()))
+        for (altered in listOf(release(asset().put("size", 8192)),
+            release(asset().put("digest", "sha256:" + "b".repeat(64))),
+            release(asset().put("browser_download_url", url.replace("MMRL-LSPosed", "MMRL"))),
+            release(asset().put("state", "new")), release().put("draft", true),
+            release().put("prerelease", true), release().put("tag_name", "v9"),
+            release().put("assets", JSONArray().put(asset()).put(asset())),
+            release().put("assets", JSONArray()))) {
+            assertFalse(GitHubEcosystem.releaseContainsAsset(selected, altered))
+        }
     }
 }

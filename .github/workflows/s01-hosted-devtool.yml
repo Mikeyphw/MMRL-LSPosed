@@ -57,6 +57,33 @@ jobs:
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
         with:
           validate-wrappers: true
+          cache-read-only: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+
+      - name: Compare KSP plugin marker and cache after setup-gradle (advisory)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        shell: bash
+        run: python3 -B scripts/ci_gradle_plugin_diagnostics.py --job s01 --out "$RUNNER_TEMP/ksp-plugin-diagnostic.json"
+
+      - name: Restore exact trusted KSP verification receipt
+        id: ksp-receipt
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/mmrl-ksp-verified/receipt.json
+          key: mmrl-ksp-verified-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties', 'settings.gradle.kts', 'app/build.gradle.kts', 'gradle.properties', 'scripts/ci_ksp_resolution.py') }}
+
+      - name: Verify restored KSP cache and resolve plugin with bounded retries
+        shell: bash
+        run: python3 -B scripts/ci_ksp_resolution.py --out "$RUNNER_TEMP/ksp-resolution.json" --cache-receipt "$RUNNER_TEMP/mmrl-ksp-verified/receipt.json"
+
+      - name: Publish KSP configuration resolution evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mmrl-lsposed-ksp-resolution-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ksp-resolution.json
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Install reviewed Devtool commit in venv
         shell: bash
@@ -238,6 +265,22 @@ jobs:
           path: ${{ runner.temp }}/s01-evidence/
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Publish S01 KSP plugin diagnostic evidence (advisory)
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mmrl-lsposed-ksp-s01-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ksp-plugin-diagnostic.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Save verified KSP receipt from successful trusted main only
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ksp-receipt.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/mmrl-ksp-verified/receipt.json
+          key: ${{ steps.ksp-receipt.outputs.cache-primary-key }}
 
   emulator-instrumentation:
     name: API 36 non-root Compose AndroidTest (emulator)

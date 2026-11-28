@@ -4,6 +4,8 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -74,8 +76,13 @@ class S09EmulatorUiTest {
         compose.onNodeWithText("CI artifacts").performClick()
         compose.onNodeWithTag("downloads_query").performTextInput("421428")
         compose.onNodeWithTag("downloads_clear_query").performClick()
+        compose.onNodeWithTag("downloads_list").performScrollToNode(hasText("Download queue"))
+        compose.onNodeWithText("Download queue").assertExists()
+        compose.onNodeWithTag("downloads_list").performScrollToNode(hasText("Load recent GitHub Actions runs. Artifacts open on GitHub and may require sign-in."))
         compose.onNodeWithText("Load recent GitHub Actions runs. Artifacts open on GitHub and may require sign-in.").assertExists()
+        compose.onNodeWithTag("downloads_list").performScrollToNode(hasText("Releases"))
         compose.onNodeWithText("Releases").performClick()
+        compose.onNodeWithTag("downloads_list").performScrollToNode(hasText("Load the official releases when you're ready."))
         compose.onNodeWithText("Load the official releases when you're ready.").assertExists()
         assertNoImplicitVectorConnection()
     }
@@ -88,6 +95,18 @@ class S09EmulatorUiTest {
         compose.onNodeWithTag("github_token_input").assertExists()
         compose.onNodeWithTag("github_token_check").assertExists()
         compose.onNodeWithTag("nav_modules").assertDoesNotExist()
+        // Persist UI selection without requesting Vector/root or changing its state.
+        try {
+            compose.onNodeWithText("AMOLED").performClick()
+            compose.runOnUiThread {
+                assertTrue("AMOLED preference must persist",
+                    LocalSettings.appearance(compose.activity) == "AMOLED")
+            }
+        } finally {
+            compose.runOnUiThread {
+                LocalSettings.setAppearance(compose.activity, "SYSTEM")
+            }
+        }
         assertNoImplicitVectorConnection()
     }
 }

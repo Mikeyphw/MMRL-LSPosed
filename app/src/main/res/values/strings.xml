@@ -47,4 +47,5 @@
     <string name="loading">Finding installed modules…</string>
     <string name="count_label">%1$d installed</string>
     <string name="config_not_verified">Saved module state is only available after explicitly connecting to Vector.</string>
+    <string name="activity_history">Activity</string>
 </resources>

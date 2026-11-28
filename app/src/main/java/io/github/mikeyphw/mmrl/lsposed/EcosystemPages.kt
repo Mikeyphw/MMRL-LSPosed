@@ -28,7 +28,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -47,7 +46,8 @@ import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 private fun openGitHub(context: Context, link: String) {
     val uri = Uri.parse(link)
@@ -225,14 +225,29 @@ internal fun DownloadsPage(padding: PaddingValues) {
     var ciHistory by remember { mutableStateOf<List<CiArtifactDownload.Saved>?>(null) }
     var ciSelected by remember { mutableStateOf<CiArtifactDownload.Saved?>(null) }
     var currentAttemptOnly by rememberSaveable { mutableStateOf(true) }
-    var saving by remember { mutableStateOf(false) }
-    var cancelRequested by remember { mutableStateOf(false) }
-    val cancelSignal = remember { AtomicBoolean(false) }
-    var progress by remember { mutableStateOf(0) }
-    // Leaving this screen must cancel an in-flight transfer; never finish it silently.
-    DisposableEffect(Unit) { onDispose { cancelSignal.set(true) } }
+    var queueEntries by remember { mutableStateOf<List<QueueEntry>>(emptyList()) }
+    var queueError by remember { mutableStateOf(false) }
+    // The application owns transfers; recomposition, tab switching and navigation do not cancel them.
+    // This effect reads local snapshots only and stops polling when the screen leaves composition.
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            withContext(Dispatchers.IO) { runCatching { AppTransferQueue.get(context.applicationContext).snapshot() } }
+                .onSuccess { queueEntries = it; queueError = false }
+                .onFailure { queueError = true }
+            delay(500)
+        }
+    }
+    fun queueAction(action: (DurableTransferQueue) -> Unit) {
+        coroutine.launch {
+            withContext(Dispatchers.IO) { runCatching {
+                val queue = AppTransferQueue.get(context.applicationContext)
+                action(queue); queue.snapshot()
+            } }.onSuccess { queueEntries = it; queueError = false }
+                .onFailure { message = "Download queue action refused; inspect queue and storage" }
+        }
+    }
 
-    LazyColumn(Modifier.fillMaxSize().padding(padding),
+    LazyColumn(Modifier.fillMaxSize().padding(padding).testTag("downloads_list"),
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
@@ -287,14 +302,45 @@ internal fun DownloadsPage(padding: PaddingValues) {
             }
         }
         if (message.isNotBlank()) item { Text(message, color = MaterialTheme.colorScheme.error) }
-        if (saving) item {
-            Text(if (tab == 1) "CI ZIP transfer: $progress% (digest checked after transfer)"
-                else "Release download: $progress% (digest checked after transfer)")
-            OutlinedButton(onClick = { cancelSignal.set(true); cancelRequested = true },
-                enabled = !cancelRequested, modifier = Modifier.testTag("downloads_cancel")) {
-                Text(if (cancelRequested) "Cancelling…" else "Cancel download")
+        if (queueError) item { Text("Download queue unavailable. No transfer was assumed successful.", color = MaterialTheme.colorScheme.error) }
+        item {
+            Text("Download queue", style = MaterialTheme.typography.titleMedium)
+            Text("At most two active transfers. Interrupted transfers require explicit retry. Verified files never install automatically.",
+                style = MaterialTheme.typography.bodySmall)
+        }
+        items(queueEntries, key = { "queue-${it.id}" }) { row ->
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(row.source.name, style = MaterialTheme.typography.titleSmall)
+                    Text("${row.state.name} · ${(row.bytes * 100L / row.source.size).toInt()}% · attempt ${row.attempt}/3")
+                    row.failure?.let { Text(it.name, style = MaterialTheme.typography.bodySmall) }
+                    if (row.activityId.isNotEmpty()) Text("Activity: ${row.activityId}", style = MaterialTheme.typography.labelSmall)
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (row.state in setOf(QueueStatus.QUEUED, QueueStatus.RUNNING, QueueStatus.RETRY_WAIT, QueueStatus.INTERRUPTED)) {
+                            OutlinedButton(onClick = { queueAction { it.cancel(row.id) } }, modifier = Modifier.testTag("downloads_cancel")) { Text("Cancel download") }
+                        }
+                        if (row.state in setOf(QueueStatus.FAILED, QueueStatus.CANCELLED, QueueStatus.INTERRUPTED)) {
+                            OutlinedButton(onClick = { queueAction { it.retry(row.id) } }, modifier = Modifier.testTag("downloads_retry")) { Text("Retry") }
+                        }
+                        if (row.state == QueueStatus.SUCCEEDED) {
+                            OutlinedButton(onClick = {
+                                coroutine.launch {
+                                    if (row.source.kind == "RELEASE") {
+                                        val found = withContext(Dispatchers.IO) { runCatching { AppTransferQueue.findRelease(context.applicationContext, row) }.getOrNull() }
+                                        if (found == null) message = "Verified file or receipt unavailable" else saved = found
+                                    } else {
+                                        val found = withContext(Dispatchers.IO) { runCatching { AppTransferQueue.findCi(context.applicationContext, row) }.getOrNull() }
+                                        if (found == null) message = "Verified CI archive or receipt unavailable" else { tab = 1; ciSelected = found }
+                                    }
+                                }
+                            }) { Text("Select verified file") }
+                        }
+                        if (!row.active) OutlinedButton(onClick = { queueAction { it.remove(row.id) } }) { Text("Remove queue entry") }
+                    }
+                }
             }
         }
+
         item {
             OutlinedButton(onClick = {
                 busy = true; message = ""
@@ -448,32 +494,9 @@ internal fun DownloadsPage(padding: PaddingValues) {
                                     style = MaterialTheme.typography.labelSmall)
                                 if (asset.verifiedDownloadable) {
                                     OutlinedButton(onClick = {
-                                        busy = true; saving = true; cancelRequested = false
-                                        cancelSignal.set(false)
-                                        progress = 0; message = ""
-                                        coroutine.launch {
-                                            var lastPercent = -1 // Throttle UI events to at most 101 updates.
-                                            val outcome = withContext(Dispatchers.IO) { runCatching {
-                                                VerifiedDownload.save(context.applicationContext, asset,
-                                                    cancelled = { cancelSignal.get() },
-                                                    onProgress = { received, total ->
-                                                        val percent = ((received * 100) / total).toInt().coerceIn(0, 100)
-                                                        if (percent != lastPercent) {
-                                                            lastPercent = percent
-                                                            coroutine.launch { progress = percent }
-                                                        }
-                                                    })
-                                            } }
-                                            outcome.onSuccess { file ->
-                                                saved = VerifiedDownload.Saved(file,
-                                                    asset.digest!!.removePrefix("sha256:"), asset.releaseTag)
-                                                message = "Verified SHA-256 and GitHub release path; signer NOT verified"
-                                            }
-                                                .onFailure { message = it.message?.take(180) ?: "Download failed" }
-                                            saving = false; busy = false
-                                        }
-                                    }, enabled = !busy, modifier = Modifier.testTag("verified_download")) {
-                                        Text("Save SHA-256 verified")
+                                        queueAction { it.enqueue(AppTransferQueue.release(asset)) }
+                                    }, enabled = !queueError, modifier = Modifier.testTag("verified_download")) {
+                                        Text("Queue SHA-256 verified download")
                                     }
                                 }
                             }
@@ -567,27 +590,10 @@ internal fun DownloadsPage(padding: PaddingValues) {
                             }, enabled = !artifact.expired) { Text("View on GitHub") }
                             if (CiArtifactDownload.eligible(active, artifact)) {
                                 OutlinedButton(onClick = {
-                                    if (busy || saving) return@OutlinedButton
-                                    busy = true; saving = true; message = ""; progress = 0
-                                    cancelSignal.set(false); cancelRequested = false
-                                    coroutine.launch {
-                                        withContext(Dispatchers.IO) { runCatching {
-                                            CiArtifactDownload.save(context.applicationContext, active, artifact,
-                                                cancelled = { cancelSignal.get() },
-                                                onProgress = { count, length ->
-                                                    progress = (count * 100L / length).toInt()
-                                                })
-                                        } }.onSuccess { record ->
-                                            ciSelected = record
-                                            message = "CI ZIP SHA-256 and size verified. APK signer and release are NOT qualified."
-                                        }.onFailure { failure ->
-                                            message = failure.message?.take(180) ?: "CI download refused"
-                                        }
-                                        saving = false; busy = false
-                                    }
-                                }, enabled = !busy && !saving,
+                                    queueAction { it.enqueue(AppTransferQueue.ci(active, artifact)) }
+                                }, enabled = !queueError,
                                     modifier = Modifier.testTag("ci_archive_download")) {
-                                    Text("Download and verify CI ZIP")
+                                    Text("Queue and verify CI ZIP")
                                 }
                             }
                         }

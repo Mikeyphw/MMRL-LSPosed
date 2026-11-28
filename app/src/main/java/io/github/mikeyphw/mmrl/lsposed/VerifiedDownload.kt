@@ -2,19 +2,16 @@ package io.github.mikeyphw.mmrl.lsposed
 
 import android.content.Context
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
-import java.io.InterruptedIOException
 import java.net.HttpURLConnection
 import java.net.URL
-import java.security.MessageDigest
+import io.github.mikeyphw.mmrl.shared.Sha256Digest
 import java.nio.file.Files
 import org.json.JSONObject
 
 /** Save only SHA-256-pinned first-party releases. Never install APKs automatically. */
 internal object VerifiedDownload {
     private const val MAX_BYTES = 104_857_600L
-    private val digestRegex = Regex("sha256:[0-9a-f]{64}")
     private val nameRegex = Regex("[A-Za-z0-9][A-Za-z0-9_.-]{0,119}\\.(apk|zip)", RegexOption.IGNORE_CASE)
     private val redirectHosts = setOf("github.com", "release-assets.githubusercontent.com",
         "objects.githubusercontent.com")
@@ -23,7 +20,7 @@ internal object VerifiedDownload {
         val parsed = URL(url)
         parsed.protocol == "https" && parsed.host == "github.com" && parsed.port == -1 &&
             parsed.path.startsWith("/Mikeyphw/MMRL-LSPosed/releases/download/") &&
-            !parsed.path.contains("..") && parsed.userInfo == null
+            !parsed.path.contains("..") && parsed.userInfo == null && parsed.query == null && parsed.ref == null
     }.getOrDefault(false)
 
     fun allowedName(name: String): Boolean = nameRegex.matches(name) && !name.contains("..")
@@ -46,7 +43,9 @@ internal object VerifiedDownload {
         }
         val tag = info.optString("release_tag")
         val name = info.optString("asset_name")
-        if (info.optString("schema") != RECEIPT_SCHEMA ||
+        if (info.keys().asSequence().toSet() != setOf("schema", "repository", "release_tag",
+                "asset_name", "asset_url", "size", "file", "sha256") ||
+            info.optString("schema") != RECEIPT_SCHEMA ||
             info.optString("repository") != ReleaseIdentityPolicy.REPOSITORY ||
             info.optLong("size", -1L) != size ||
             filename != "${hash.take(16)}-$name" ||
@@ -62,7 +61,7 @@ internal object VerifiedDownload {
     }.getOrDefault(false)
 
     private fun safeSavedFile(root: File, file: File): Boolean = runCatching {
-        root.isDirectory && !file.isDirectory && file.isFile &&
+        root.isDirectory && !Files.isSymbolicLink(root.toPath()) && !file.isDirectory && file.isFile &&
             !Files.isSymbolicLink(file.toPath()) &&
             file.canonicalFile.parentFile == root.canonicalFile &&
             file.absoluteFile.parentFile == root.absoluteFile &&
@@ -110,111 +109,110 @@ internal object VerifiedDownload {
 
     fun save(context: Context, asset: GitHubEcosystem.Asset,
              cancelled: () -> Boolean = { false },
-             onProgress: (Long, Long) -> Unit = { _, _ -> }): File {
-        val digest = asset.digest ?: throw IOException("No published SHA-256; use GitHub instead")
-        if (!digestRegex.matches(digest) || asset.size !in 1..MAX_BYTES ||
-            !asset.verifiedDownloadable || !allowedSourceUrl(asset.url) ||
+             onProgress: (Long, Long) -> Unit = { _, _ -> },
+             resumeId: String? = null, onStarted: (String) -> Unit = {}): File {
+        val digest = asset.digest?.let(Sha256Digest::parse)
+            ?: throw TransferRefused("No published SHA-256; use GitHub instead")
+        if (!asset.verifiedDownloadable || !allowedSourceUrl(asset.url) ||
             !ReleaseIdentityPolicy.asset(asset.releaseTag, asset.name, asset.url))
-            throw IOException("Unverified or unsupported release asset")
-        val root = File(context.filesDir, "verified-downloads")
-        if (!root.isDirectory && !root.mkdirs()) throw IOException("Cannot create verified downloads directory")
-        val expected = digest.removePrefix("sha256:")
-        val destination = File(root, "${expected.take(16)}-${asset.name}")
-        if (destination.exists()) {
-            if (safeSavedFile(root, destination) && destination.length() == asset.size &&
-                sha256(destination) == expected) {
-                writeReceipt(destination, expected, asset)
-                return destination
-            }
-            throw IOException("Existing download differs; refusing replacement")
-        }
-        val temp = File.createTempFile(".download-", ".pending", root)
+            throw TransferRefused("Unverified or unsupported release asset")
+        val transferId = try { ActivityTransferJournal.begin(context, "RELEASE") }
+            catch (failure: Exception) { throw publicTransferFailure(failure) }
         try {
-            var url = URL(asset.url)
-            var redirects = 0
-            while (true) {
-                if (url.protocol != "https" || url.host !in redirectHosts || url.port != -1 ||
-                    url.userInfo != null) throw IOException("Download redirected outside trusted HTTPS hosts")
-                val connection = (url.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 10_000
-                    readTimeout = 15_000
-                    instanceFollowRedirects = false
-                    setRequestProperty("User-Agent", "MMRL-LSPosed/0.1")
-                }
+            onStarted(transferId)
+            TransferPublication.checkCancelled(cancelled)
+            if (!GitHubEcosystem.freshReleaseAsset(asset, context))
+                throw TransferRefused("Release asset metadata changed; reload GitHub")
+            val root = File(context.filesDir, "verified-downloads")
+            TransferPublication.prepare(root)
+            val expected = digest.hex
+            val destination = File(root, "${expected.take(16)}-${asset.name}")
+            val receipt = JSONObject()
+                .put("schema", RECEIPT_SCHEMA)
+                .put("repository", ReleaseIdentityPolicy.REPOSITORY)
+                .put("release_tag", asset.releaseTag)
+                .put("asset_name", asset.name)
+                .put("asset_url", asset.url)
+                .put("size", asset.size)
+                .put("file", destination.name).put("sha256", expected)
+                .toString().toByteArray(Charsets.UTF_8)
+            val publish: (File?) -> Unit = { stage ->
+                TransferPublication.publish(root, stage, destination, asset.size, digest,
+                    ::hasZipHeader, receipt, { bytes ->
+                        runCatching { receiptTag(JSONObject(bytes.toString(Charsets.UTF_8)),
+                            destination.name, expected, asset.size) == asset.releaseTag }.getOrDefault(false)
+                    }, cancelled)
+            }
+            if (TransferPublication.exists(destination)) {
+                publish(null)
+            } else {
+                val stage = ResumableTransfer.create(root, resumeId,
+                    "release:${asset.releaseTag}:${asset.name}:${asset.size}:${digest.hex}", asset.name, asset.size, digest)
                 try {
-                    val code = connection.responseCode
-                    if (code in listOf(301, 302, 303, 307, 308)) {
-                        if (++redirects > 4) throw IOException("Too many release redirects")
-                        val location = connection.getHeaderField("Location")
-                            ?: throw IOException("Missing release redirect location")
-                        url = URL(url, location)
-                        continue
-                    }
-                    if (code != 200) throw IOException("Release download HTTP $code")
-                    val declared = connection.contentLengthLong
-                    if (declared > MAX_BYTES || (declared >= 0 && declared != asset.size))
-                        throw IOException("Unexpected release file size")
-                    val sha = MessageDigest.getInstance("SHA-256")
-                    var count = 0L
-                    FileOutputStream(temp).use { file ->
-                        connection.inputStream.use { input ->
-                            val buf = ByteArray(16_384)
+                    var restarts = 0
+                    while (true) {
+                        try {
+                            var url = URL(asset.url)
+                            var redirects = 0
                             while (true) {
-                                if (cancelled()) throw InterruptedIOException("Download cancelled; incomplete file discarded")
-                                val len = input.read(buf)
-                                if (len < 0) break
-                                count += len
-                                if (count > MAX_BYTES || count > asset.size)
-                                    throw IOException("Release download exceeded verified size")
-                                sha.update(buf, 0, len)
-                                file.write(buf, 0, len)
-                                onProgress(count, asset.size)
+                                TransferPublication.checkCancelled(cancelled)
+                                if (url.protocol != "https" || url.host !in redirectHosts || url.port != -1 ||
+                                    url.userInfo != null || url.ref != null)
+                                    throw TransferRefused("Download redirected outside trusted HTTPS hosts")
+                                val connection = (url.openConnection() as HttpURLConnection).apply {
+                                    connectTimeout = 10_000
+                                    readTimeout = 15_000
+                                    instanceFollowRedirects = false
+                                    setRequestProperty("User-Agent", "MMRL-LSPosed/0.1")
+                                    setRequestProperty("Accept-Encoding", "identity")
+                                }
+                                try {
+                                    stage.prepareConnection(connection)
+                                    val code = connection.responseCode
+                                    TransferPublication.checkCancelled(cancelled)
+                                    if (code in listOf(301, 302, 303, 307, 308)) {
+                                        if (++redirects > 4) throw TransferRefused("Too many release redirects")
+                                        val location = connection.getHeaderField("Location")
+                                            ?: throw TransferRefused("Missing release redirect location")
+                                        url = URL(url, location)
+                                        continue
+                                    }
+                                    if (code !in setOf(200, 206, 416)) throw transferHttpFailure(code, connection.getHeaderField("Retry-After"))
+                                    stage.copyResponse(connection.url.host.lowercase(java.util.Locale.ROOT), code, connection.getHeaderField("Content-Range"), connection.contentLengthLong,
+                                        connection.contentEncoding, connection.getHeaderField("ETag"), { connection.inputStream }, cancelled) { count, total ->
+                                        ActivityTransferJournal.progress(context, transferId, count, total)
+                                        onProgress(count, total)
+                                    }
+                                    break
+                                } finally { connection.disconnect() }
                             }
+                            break
+                        } catch (_: RestartTransfer) {
+                            if (++restarts > 1 || !GitHubEcosystem.freshReleaseAsset(asset, context))
+                                throw TransferRefused("Release range or identity changed; reload GitHub")
                         }
-                        file.fd.sync()
                     }
-                    if (count != asset.size || sha.digest().joinToString("") { "%02x".format(it) } != expected)
-                        throw IOException("Release SHA-256/size mismatch; download discarded")
-                    if (!hasZipHeader(temp)) throw IOException("Release asset is not an APK/ZIP archive")
-                    if (!temp.renameTo(destination)) throw IOException("Cannot finalize verified release")
-                    writeReceipt(destination, expected, asset)
-                    return destination
-                } finally { connection.disconnect() }
+                    TransferPublication.checkCancelled(cancelled)
+                    if (!GitHubEcosystem.freshReleaseAsset(asset, context))
+                        throw TransferRefused("Release asset metadata changed during transfer")
+                    publish(stage.file)
+                    stage.discard()
+                } catch (failure: Exception) {
+                    try { stage.retainAfter(failure, resumeId != null) } catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
+                    throw failure
+                }
             }
-        } finally { temp.delete() }
-    }
-
-    private fun writeReceipt(file: File, hash: String, asset: GitHubEcosystem.Asset) {
-        require(ReleaseIdentityPolicy.asset(asset.releaseTag, asset.name, asset.url))
-        val receipt = File(file.parentFile, "${file.name}.receipt.json")
-        val temp = File(file.parentFile, ".${file.name}.receipt.pending")
-        try {
-            FileOutputStream(temp).use { out ->
-                out.write(JSONObject()
-                    .put("schema", RECEIPT_SCHEMA)
-                    .put("repository", ReleaseIdentityPolicy.REPOSITORY)
-                    .put("release_tag", asset.releaseTag)
-                    .put("asset_name", asset.name)
-                    .put("asset_url", asset.url)
-                    .put("size", asset.size)
-                    .put("file", file.name).put("sha256", hash)
-                    .toString().toByteArray(Charsets.UTF_8))
-                out.fd.sync()
-            }
-            if (!temp.renameTo(receipt)) throw IOException("Cannot save verified download receipt")
-        } finally { temp.delete() }
-    }
-
-    private fun sha256(file: File): String {
-        val md = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buf = ByteArray(16384)
-            while (true) {
-                val n = input.read(buf)
-                if (n < 0) break
-                md.update(buf, 0, n)
-            }
+            ActivityTransferJournal.finish(context, transferId, "SUCCEEDED")
+            return destination
+        } catch (failure: Exception) {
+            val verdict = if (failure is TransferCancelled) "CANCELLED" else "FAILED"
+            try { ActivityTransferJournal.finish(context, transferId, verdict) }
+            catch (historyFailure: Exception) { failure.addSuppressed(historyFailure) }
+            throw publicTransferFailure(failure)
         }
-        return md.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun sha256(file: File): String = file.inputStream().use {
+        Sha256Digest.calculateBounded(it, MAX_BYTES).digest.hex
     }
 }

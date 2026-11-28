@@ -25,10 +25,19 @@ class R3BContracts(unittest.TestCase):
         for needle in ('GitHubEcosystem.freshRun(run, context)',
                        'GitHubEcosystem.runArtifacts(run, context).singleOrNull { it.id == artifact.id }',
                        'inspection.currentAttempt && inspection.eventCompatible',
-                       '"sha256:$hash" != artifact.digest',
-                       'length != artifact.bytes',
+                       'Sha256Digest.parse(requireNotNull(artifact.digest))',
+                       'TransferPublication.verify(folder, input, artifact.bytes, digest)',
+                       'stage.copyResponse(conn.url.host.lowercase(java.util.Locale.ROOT), code, conn.getHeaderField("Content-Range"), conn.contentLengthLong,',
+                       'TransferPublication.publish(folder, tmp, dest, artifact.bytes, digest,',
                        'artifact.expired', 'published_digest', 'independently_attested'):
             self.assertIn(needle,s)
+        publication = (SRC/'TransferPublication.kt').read_text()
+        for needle in ('declared != expected', 'total != expected', 'observed.bytes == expected',
+                       'observed.digest == digest', 'Files.createLink(destination.toPath(), stage.toPath())',
+                       'receiptValid()', 'syncDirectory(root)'):
+            self.assertIn(needle, publication)
+        self.assertNotIn('dest.delete()', s)
+        self.assertNotIn('.renameTo(', s)
 
     def test_no_background_or_implicit_binary_install(self):
         s=self.archive+self.ui

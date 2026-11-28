@@ -81,6 +81,27 @@ internal object GitHubEcosystem {
         }
     }
 
+    /** Fetch the exact stable first-party tag, never a cached listing or redirected repository. */
+    fun freshReleaseAsset(asset: Asset, context: Context): Boolean {
+        if (!asset.verifiedDownloadable) return false
+        val release = requestObject("$API/repos/$REPOSITORY/releases/tags/${asset.releaseTag}", context)
+        return releaseContainsAsset(asset, release)
+    }
+
+    internal fun releaseContainsAsset(asset: Asset, release: JSONObject): Boolean {
+        if (!asset.verifiedDownloadable || release.optBoolean("draft", true) ||
+            release.optBoolean("prerelease", true) || release.optString("tag_name") != asset.releaseTag ||
+            !ReleaseIdentityPolicy.releasePage(asset.releaseTag, release.optString("html_url"))) return false
+        val items = release.optJSONArray("assets") ?: return false
+        if (items.length() !in 1..100) return false
+        val matches = (0 until items.length()).mapNotNull { items.optJSONObject(it) }
+            .filter { it.optString("name") == asset.name }
+        val current = matches.singleOrNull() ?: return false
+        return current.optLong("size", -1) == asset.size && current.optString("digest") == asset.digest &&
+            current.optString("browser_download_url") == asset.url &&
+            current.optString("state") == "uploaded"
+    }
+
     fun recentRuns(context: Context): List<Run> {
         val items = requestObject("$API/repos/$REPOSITORY/actions/runs?per_page=15", context)
             .optJSONArray("workflow_runs") ?: JSONArray()
@@ -183,6 +204,7 @@ internal object GitHubEcosystem {
         }
         try {
             val status = connection.responseCode
+            if (status in setOf(408, 429, 500, 502, 503, 504)) throw transferHttpFailure(status, connection.getHeaderField("Retry-After"))
             if (status != 200) throw IOException(when (status) {
                 401 -> "GitHub authentication rejected (HTTP 401). Remove or replace the token in Settings."
                 403, 429 -> "GitHub API rate limit or permission denied (HTTP $status)."
