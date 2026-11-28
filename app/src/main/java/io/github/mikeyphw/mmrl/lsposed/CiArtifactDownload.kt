@@ -5,11 +5,11 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.io.InterruptedIOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.file.Files
 import java.security.MessageDigest
+import io.github.mikeyphw.mmrl.shared.Sha256Digest
 import java.util.zip.CRC32
 import java.util.zip.ZipFile
 
@@ -102,17 +102,8 @@ internal object CiArtifactDownload {
     private fun root(context: Context) = File(context.filesDir, "ci-archives")
 
     /** Hash the raw GitHub artifact ZIP, not an individual ZIP entry. */
-    private fun sha256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { stream ->
-            val buffer = ByteArray(16_384)
-            while (true) {
-                val n = stream.read(buffer)
-                if (n < 0) break
-                digest.update(buffer, 0, n)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+    private fun sha256(file: File): String = file.inputStream().use {
+        Sha256Digest.calculateBounded(it, MAX_ARCHIVE).digest.hex
     }
 
     /** Receipt describes authenticated metadata, not cryptographic build provenance. */
@@ -179,10 +170,11 @@ internal object CiArtifactDownload {
 
     /** A token is used only against api.github.com; never forwarded to the 302 URL. */
     private fun download(context: Context, id: Long, target: File,
-                         limit: Long, cancelled: () -> Boolean, progress: (Long, Long) -> Unit): Pair<String, Long> {
+                         limit: Long, cancelled: () -> Boolean, progress: (Long, Long) -> Unit) {
+        TransferPublication.checkCancelled(cancelled)
         val token = try { LocalSettings.gitHubToken(context) }
-            catch (_: Exception) { throw IOException("GitHub token unavailable; update Settings") }
-            ?: throw IOException("Add a GitHub token with Actions: read access in Settings")
+            catch (_: Exception) { throw TransferRefused("GitHub token unavailable; update Settings") }
+            ?: throw TransferRefused("Add a GitHub token with Actions: read access in Settings")
         val api = URL("https://api.github.com/repos/$REPOSITORY/actions/artifacts/$id/zip")
         val initial = (api.openConnection() as HttpURLConnection).apply {
             instanceFollowRedirects = false
@@ -193,106 +185,110 @@ internal object CiArtifactDownload {
             setRequestProperty("Authorization", "Bearer $token")
         }
         val redirect = try {
-            when (initial.responseCode) {
-                302 -> initial.getHeaderField("Location") ?: throw IOException("GitHub omitted download location")
-                401, 403 -> throw IOException("GitHub Actions access denied; check token Actions: read permission")
-                410 -> throw IOException("CI artifact expired")
-                else -> throw IOException("GitHub artifact archive unavailable")
+            val code = initial.responseCode
+            TransferPublication.checkCancelled(cancelled)
+            when (code) {
+                302 -> initial.getHeaderField("Location") ?: throw TransferRefused("GitHub omitted download location")
+                401, 403 -> throw TransferRefused("GitHub Actions access denied; check token Actions: read permission")
+                410 -> throw TransferRefused("CI artifact expired")
+                else -> throw TransferRefused("GitHub artifact archive unavailable")
             }
         } finally { initial.disconnect() }
-        if (!allowedStorageRedirect(redirect)) throw IOException("Unexpected GitHub artifact storage host")
+        if (!allowedStorageRedirect(redirect)) throw TransferRefused("Unexpected GitHub artifact storage host")
         val conn = (URL(redirect).openConnection() as HttpURLConnection).apply {
             instanceFollowRedirects = false
             connectTimeout = 12_000
             readTimeout = 20_000
             setRequestProperty("User-Agent", "MMRL-LSPosed/0.1")
+            setRequestProperty("Accept-Encoding", "identity")
             // NEVER forward token or signed URL to logs, receipts or other hosts.
         }
         try {
-            if (conn.responseCode != 200) throw IOException("CI archive storage unavailable")
-            if (conn.contentLengthLong > limit) throw IOException("CI archive exceeds announced size")
-            val digest = MessageDigest.getInstance("SHA-256")
-            var count = 0L
+            if (conn.responseCode != 200) throw TransferRefused("CI archive storage unavailable")
             FileOutputStream(target).use { output ->
                 conn.inputStream.use { input ->
-                    val buf = ByteArray(16_384)
-                    while (true) {
-                        if (cancelled()) throw InterruptedIOException("CI archive download cancelled")
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        count += n
-                        if (count > limit || count > MAX_ARCHIVE) throw IOException("CI archive larger than metadata")
-                        digest.update(buf, 0, n)
-                        output.write(buf, 0, n)
-                        progress(count, limit)
-                    }
+                    TransferPublication.copyExact(input, output, limit, conn.contentLengthLong,
+                        conn.contentEncoding, cancelled, progress)
                 }
                 output.fd.sync()
             }
-            return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) } to count
         } finally { conn.disconnect() }
     }
+
+    private fun freshArtifact(context: Context, run: GitHubEcosystem.Run,
+                              artifact: GitHubEcosystem.Artifact): Boolean =
+        GitHubEcosystem.freshRun(run, context) &&
+            GitHubEcosystem.runArtifacts(run, context).singleOrNull { it.id == artifact.id } == artifact &&
+            GitHubEcosystem.freshRun(run, context)
 
     fun save(context: Context, run: GitHubEcosystem.Run, artifact: GitHubEcosystem.Artifact,
              cancelled: () -> Boolean = { false },
              onProgress: (Long, Long) -> Unit = { _, _ -> }): Saved {
-        if (!eligible(run, artifact)) throw IOException("Artifact not current, source-bound or digest-published")
-        val transferId = ActivityTransferJournal.begin(context, "CI:${run.id}:${run.attempt}:${artifact.id}")
+        if (!eligible(run, artifact)) throw TransferRefused("Artifact not current, source-bound or digest-published")
+        val digest = requireNotNull(Sha256Digest.parse(requireNotNull(artifact.digest)))
+        val transferId = try { ActivityTransferJournal.begin(context, "CI:${run.id}:${run.attempt}:${artifact.id}") }
+            catch (failure: Exception) { throw publicTransferFailure(failure) }
         try {
-        // Independent API read at the moment of download prevents stale/run-attempt metadata.
-        val current = GitHubEcosystem.freshRun(run, context)
-        if (!current || GitHubEcosystem.runArtifacts(run, context).singleOrNull { it.id == artifact.id } != artifact)
-            throw IOException("Run attempt or artifact metadata changed; reload GitHub")
-        val folder = root(context)
-        if (Files.isSymbolicLink(folder.toPath())) throw IOException("CI archive directory must not be a symlink")
-        if (!folder.isDirectory && !folder.mkdirs()) throw IOException("Cannot create CI archive directory")
-        val dest = File(folder, filename(run, artifact))
-        if (dest.exists() || receipt(dest).exists()) throw IOException("CI archive already exists; inspect saved copy")
-        val tmp = File.createTempFile(".ci-", ".pending", folder)
-        try {
-            val (hash, length) = download(context, artifact.id, tmp, artifact.bytes, cancelled,
-                { current, total ->
-                    ActivityTransferJournal.progress(context, transferId, current, total)
-                    onProgress(current, total)
-                })
-            if (length != artifact.bytes || "sha256:$hash" != artifact.digest)
-                throw IOException("GitHub-published archive SHA-256 or byte size mismatch")
-            if (cancelled()) throw InterruptedIOException("CI archive download cancelled")
-            val entries = inspectZip(tmp)
-            if (!tmp.renameTo(dest)) throw IOException("Cannot finalize archive")
-            val doc = JSONObject()
-                .put("schema", SCHEMA).put("repository", REPOSITORY)
-                .put("run_id", run.id).put("attempt", run.attempt)
-                .put("head_sha", run.headSha).put("event", run.event)
-                .put("head_branch", run.headBranch).put("artifact_id", artifact.id)
-                .put("artifact_name", artifact.name)
-                .put("published_digest", artifact.digest).put("archive_sha256", hash)
-                .put("bytes", length).put("entry_count", entries.size)
-                .put("file", dest.name).put("publisher_qualified", false)
-                .put("apk_signer_qualified", false).put("independently_attested", false)
-            val tmpReceipt = File.createTempFile(".ci-receipt-", ".pending", folder)
-            try {
-                FileOutputStream(tmpReceipt).use { out ->
-                    out.write(doc.toString().toByteArray(Charsets.UTF_8))
-                    out.fd.sync()
-                }
-                if (!tmpReceipt.renameTo(receipt(dest))) throw IOException("Cannot finalize CI archive receipt")
-            } finally { tmpReceipt.delete() }
-            ActivityTransferJournal.finish(context, transferId, "SUCCEEDED")
-            return Saved(dest, run.id, run.attempt, artifact.id, run.headSha, hash, entries.size)
-        } catch (failure: Exception) {
-            // An interrupted receipt write must not strand an untracked archive.
-            if (dest.exists() && !receipt(dest).exists()) dest.delete()
-            throw failure
-        } finally { tmp.delete() }
-        } catch (failure: Exception) {
-            val verdict = if (failure is java.io.InterruptedIOException) "CANCELLED" else "FAILED"
-            try {
-                ActivityTransferJournal.finish(context, transferId, verdict)
-            } catch (historyFailure: Exception) {
-                failure.addSuppressed(historyFailure)
+            TransferPublication.checkCancelled(cancelled)
+            if (!freshArtifact(context, run, artifact))
+                throw TransferRefused("Run attempt or artifact metadata changed; reload GitHub")
+            val folder = root(context)
+            TransferPublication.prepare(folder)
+            val dest = File(folder, filename(run, artifact))
+            val tmp = if (TransferPublication.exists(dest)) null else {
+                if (folder.usableSpace < artifact.bytes) throw TransferRefused("Not enough storage for CI archive")
+                File.createTempFile(".ci-", ".pending", folder)
             }
-            throw failure
+            try {
+                if (tmp != null) {
+                    download(context, artifact.id, tmp, artifact.bytes, cancelled) { current, total ->
+                        ActivityTransferJournal.progress(context, transferId, current, total)
+                        onProgress(current, total)
+                    }
+                    TransferPublication.checkCancelled(cancelled)
+                    if (!freshArtifact(context, run, artifact))
+                        throw TransferRefused("Run attempt or artifact metadata changed during transfer")
+                }
+                val input = tmp ?: dest
+                if (!TransferPublication.verify(folder, input, artifact.bytes, digest) { inspectZip(it).isNotEmpty() })
+                    throw TransferRefused("GitHub-published archive SHA-256 or byte size mismatch")
+                val entries = inspectZip(input)
+                val hash = digest.hex
+                val doc = JSONObject()
+                    .put("schema", SCHEMA).put("repository", REPOSITORY)
+                    .put("run_id", run.id).put("attempt", run.attempt)
+                    .put("head_sha", run.headSha).put("event", run.event)
+                    .put("head_branch", run.headBranch).put("artifact_id", artifact.id)
+                    .put("artifact_name", artifact.name)
+                    .put("published_digest", artifact.digest).put("archive_sha256", hash)
+                    .put("bytes", artifact.bytes).put("entry_count", entries.size)
+                    .put("file", dest.name).put("publisher_qualified", false)
+                    .put("apk_signer_qualified", false).put("independently_attested", false)
+                // Receipt identity must include the exact current run, attempt, asset and digest.
+                // JSONObject key order is not an identity: compare the exact typed values.
+                val keys = doc.keys().asSequence().toSet()
+                TransferPublication.publish(folder, tmp, dest, artifact.bytes, digest,
+                    { inspectZip(it).size == entries.size }, doc.toString().toByteArray(Charsets.UTF_8),
+                    { bytes -> runCatching {
+                        val other = JSONObject(bytes.toString(Charsets.UTF_8))
+                        other.keys().asSequence().toSet() == keys && keys.all { key ->
+                            // Android JSON may represent a small Long as an Int after decoding.
+                            val expected = doc.get(key)
+                            val actual = other.get(key)
+                            if (expected is Number && actual is Number)
+                                expected.toString() == actual.toString() else expected == actual
+                        }
+                    }.getOrDefault(false) }, cancelled)
+                val saved = Saved(dest, run.id, run.attempt, artifact.id, run.headSha, hash, entries.size)
+                if (!recheckSaved(context, saved)) throw TransferRefused("CI archive receipt read-back failed")
+                ActivityTransferJournal.finish(context, transferId, "SUCCEEDED")
+                return saved
+            } finally { tmp?.delete() }
+        } catch (failure: Exception) {
+            val verdict = if (failure is TransferCancelled) "CANCELLED" else "FAILED"
+            try { ActivityTransferJournal.finish(context, transferId, verdict) }
+            catch (historyFailure: Exception) { failure.addSuppressed(historyFailure) }
+            throw publicTransferFailure(failure)
         }
     }
 

@@ -226,6 +226,7 @@ internal fun DownloadsPage(padding: PaddingValues) {
     var ciSelected by remember { mutableStateOf<CiArtifactDownload.Saved?>(null) }
     var currentAttemptOnly by rememberSaveable { mutableStateOf(true) }
     var saving by remember { mutableStateOf(false) }
+    var savingCi by remember { mutableStateOf(false) }
     var cancelRequested by remember { mutableStateOf(false) }
     val cancelSignal = remember { AtomicBoolean(false) }
     var progress by remember { mutableStateOf(0) }
@@ -288,7 +289,7 @@ internal fun DownloadsPage(padding: PaddingValues) {
         }
         if (message.isNotBlank()) item { Text(message, color = MaterialTheme.colorScheme.error) }
         if (saving) item {
-            Text(if (tab == 1) "CI ZIP transfer: $progress% (digest checked after transfer)"
+            Text(if (savingCi) "CI ZIP transfer: $progress% (digest checked after transfer)"
                 else "Release download: $progress% (digest checked after transfer)")
             OutlinedButton(onClick = { cancelSignal.set(true); cancelRequested = true },
                 enabled = !cancelRequested, modifier = Modifier.testTag("downloads_cancel")) {
@@ -448,7 +449,8 @@ internal fun DownloadsPage(padding: PaddingValues) {
                                     style = MaterialTheme.typography.labelSmall)
                                 if (asset.verifiedDownloadable) {
                                     OutlinedButton(onClick = {
-                                        busy = true; saving = true; cancelRequested = false
+                                        if (busy || saving) return@OutlinedButton
+                                        busy = true; saving = true; savingCi = false; cancelRequested = false
                                         cancelSignal.set(false)
                                         progress = 0; message = ""
                                         coroutine.launch {
@@ -457,7 +459,7 @@ internal fun DownloadsPage(padding: PaddingValues) {
                                                 VerifiedDownload.save(context.applicationContext, asset,
                                                     cancelled = { cancelSignal.get() },
                                                     onProgress = { received, total ->
-                                                        val percent = ((received * 100) / total).toInt().coerceIn(0, 100)
+                                                        val percent = ((received * 100) / total).toInt().coerceIn(0, 99)
                                                         if (percent != lastPercent) {
                                                             lastPercent = percent
                                                             coroutine.launch { progress = percent }
@@ -568,14 +570,19 @@ internal fun DownloadsPage(padding: PaddingValues) {
                             if (CiArtifactDownload.eligible(active, artifact)) {
                                 OutlinedButton(onClick = {
                                     if (busy || saving) return@OutlinedButton
-                                    busy = true; saving = true; message = ""; progress = 0
+                                    busy = true; saving = true; savingCi = true; message = ""; progress = 0
                                     cancelSignal.set(false); cancelRequested = false
                                     coroutine.launch {
+                                        var lastPercent = -1
                                         withContext(Dispatchers.IO) { runCatching {
                                             CiArtifactDownload.save(context.applicationContext, active, artifact,
                                                 cancelled = { cancelSignal.get() },
                                                 onProgress = { count, length ->
-                                                    progress = (count * 100L / length).toInt()
+                                                    val percent = (count * 100L / length).toInt().coerceIn(0, 99)
+                                                    if (percent != lastPercent) {
+                                                        lastPercent = percent
+                                                        coroutine.launch { progress = percent }
+                                                    }
                                                 })
                                         } }.onSuccess { record ->
                                             ciSelected = record

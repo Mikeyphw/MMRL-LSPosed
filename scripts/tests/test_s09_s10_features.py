@@ -78,15 +78,20 @@ class FeaturesContracts(unittest.TestCase):
     def test_download_fail_closed_digest_and_path(self):
         download = self.read('VerifiedDownload.kt')
         for s in ('allowedSourceUrl(url: String)', 'allowedName(name: String)',
-                  'MessageDigest.getInstance("SHA-256")',
-                  'Release SHA-256/size mismatch', 'MAX_BYTES = 104_857_600L',
+                  'Sha256Digest::parse', 'TransferPublication.publish(root, stage, destination, asset.size, digest,',
+                  'TransferPublication.copyExact(input, file, asset.size,', 'MAX_BYTES = 104_857_600L',
                   'Too many release redirects', 'Downloaded', 'temp.delete()',
                   'Cancelled'):
             # Allow case-insensitive descriptive code while checking hard invariants below.
             if s in ('Downloaded', 'Cancelled'):
                 continue
             self.assertIn(s, download)
-        self.assertIn('Download cancelled;', download)
+        publication = self.read('TransferPublication.kt')
+        for needle in ('Download cancelled;', 'observed.digest == digest', 'total != expected',
+                       'Files.createLink(destination.toPath(), stage.toPath())', 'receiptValid()'):
+            self.assertIn(needle, publication)
+        self.assertIn('failure is TransferCancelled', download)
+        self.assertNotIn('.renameTo(', download)
         self.assertIn('file.fd.sync()', download)
         self.assertIn('fun listSaved(', download)
         self.assertIn('receipt.json', download)
